@@ -268,9 +268,9 @@ tune_grid <- expand.grid(
   nrounds = c(50, 100, 150), 
   max_depth = c(3, 6, 9), 
   eta = c(0.1, 0.2, 0.3), 
-  gamma = c(0, 0.1), 
-  colsample_bytree = c(0.6, 0.8), 
-  min_child_weight = c(1, 2, 5), 
+  gamma = 0, 
+  colsample_bytree = 0.8, 
+  min_child_weight =1, 
   subsample = c(0.8, 1)
 )
 
@@ -281,7 +281,6 @@ fit_dredge2 = train(VOLUMEDREDGED ~ .,
                    data = gage_xgb,
                    method = "xgbTree",
                    tuneGrid = tune_grid,
-                   verbosity = 0,
                    trControl = ctrl,
                    na.action = na.exclude)
 
