@@ -12,19 +12,59 @@ library(caret)
 library(ggfortify)
 library(ggformula)
 library(DiagrammeR)
+library(gridExtra)
+
+
+### Key Functions 
+# Function to plot PCA
+plot_pca <- function(PCAvalues, top_loadings, PC1_explained, PC2_explained, grouping_var) {
+  
+  p <- ggplot(PCAvalues, aes(x = "PC1", y = "PC2", colour = grouping_var)) +
+    geom_point(size = 2) +  # Scatter plot
+    geom_segment(data = top_loadings, aes(x = 0, y = 0, xend = PC1 * 75, yend = PC2 * 75),
+                 arrow = arrow(length = unit(1/2, "picas")), color = "black") +  # Vectors for top loadings
+    annotate("text", x = top_loadings$PC1 * 80, y = top_loadings$PC2 * 80,
+             label = top_loadings$Variables, hjust = 0.2, vjust = 0.4) +  # Labels for top loadings
+    theme_minimal() +
+    labs(title = paste("PCA Plot with Top 10 Loadings for PC1 and PC2 - Grouped by", grouping_var),
+         x = paste("PC1 (", round(PC1_explained, 1), "%)", sep = ""),
+         y = paste("PC2 (", round(PC2_explained, 1), "%)", sep = ""))
+  
+  return(p)
+}
+
+#Function to calculate season from date 
+date_to_season <- function(date) {
+  month <- as.numeric(format(date, "%m"))
+  day <- as.numeric(format(date, "%d"))
+  # Define the seasons based on date ranges
+  if ((month == 3 && day >= 20) || (month >= 4 && month <= 6) || (month == 6 && day <= 20)) {
+    return("Spring")
+  } else if ((month == 6 && day >= 21) || (month >= 7 && month <= 9) || (month == 9 && day <= 21)) {
+    return("Summer")
+  } else if ((month == 9 && day >= 22) || (month >= 10 && month <= 12) || (month == 12 && day <= 20)) {
+    return("Fall")
+  } else {
+    return("Winter")
+  }
+}
+
 ```
 
 
-Read in the data
+### Read in the data
 ```{r}
 dredge_data<-read_csv("DredgeData.csv", show_col_types = FALSE)
 survey_data<-read_csv("SurveyData.csv", show_col_types = FALSE)
 gage_data<-read_csv("UMR_IWW_1999_2021.csv", show_col_types = FALSE)
+```
 
-### The gage data has multiple records across different gages per day, we need to
-### combine the rows by date so that there's only one record for date across all gages.
-### Since we're going to be doing a lot of work with the date column, lets format it as 
-### a date object and arrange by DATE_START and remove the old Date column
+### Clean the gage data 
+The gage data has multiple records across different gages per day, we need to
+combine the rows by date so that there's only one record for date across all gages.
+Since we're going to be doing a lot of work with the date column, lets format it as 
+a date object and arrange by DATE_START and remove the old Date column
+```{r}
 gage_data<- gage_data |>
   group_by(Date)|>
    summarize(across(everything(),~first(na.omit(.)), .names = "{.col}"))|>
@@ -42,10 +82,11 @@ gage_data<-gage_data|>
                          .)))
 ```
 
+### Cleaning the data
 Now lets clean the survey data. I only want conditional survey records between
 1999 to 2000, these are going to act as my background data. I want to combine
 these records with my dredge data. I'm also going to filter by river, remove
-pools that are not of interest, clean up the SURVEYJOBIDPK, and create some 
+pools that are not of interest, and create some 
 columns to support my join. Dates are also formatted as date objects and some
 columns are renamed to make it easier to join my surveys to my dredge data.
 Finally, select the columns we need for our analysis to join to our dredging 
@@ -88,12 +129,18 @@ combined_data <- bind_rows(survey_data, dredge_data)
 
 combined_data <-combined_data |>
      filter(DATE_START >= as.Date("1999-04-01") &
-         DATE_START <= as.Date("2021-09-30"))
+         DATE_START <= as.Date("2021-09-30")) |>
+          mutate( DREDGINGPURPOSE = case_when(DREDGINGPURPOSE == "None" ~ "No Dredging",
+                                      DREDGINGPURPOSE == "channel" ~ "Dredged"))
 
 
 combined_data <-combined_data |>
   mutate(lead_7 = (DATE_START - 7),
          lead_14 = (DATE_START - 14))
+```
+
+Check for NAs for PCA analysis. 
+```{r}
 Nas<- combined_data|>
   filter(if_any(everything(),is.na))
 
@@ -115,13 +162,17 @@ gf_histogram(~NA_by_row)
 
 gage_survey_filt <- gage_survey |>
   filter(complete.cases(gage_survey))
+```
 
-
-
+Join the gage data by the 7 day prior observations and by the 14 day prior observations
+```{r}
 gage_survey_full <- gage_survey_filt|>  
   left_join(gage_data, by = c("lead_7" = "DATE_START"), suffix = c("", "_7"))|>
   left_join(gage_data, by = c("lead_14" = "DATE_START"), suffix = c("","_14"))
+```
 
+Check again for NAs, remove any remaining NA rows. 
+```{r}
 Nas<- gage_survey_full|>
   select(-lead_7,-lead_14)|>
   filter(if_any(everything(),is.na))
@@ -137,65 +188,56 @@ final_na<-gage_survey_cleaned|>
 
 Create factored season variable that could be used in analysis
 ```{r}
-date_to_season <- function(date) {
-  month <- as.numeric(format(date, "%m"))
-  day <- as.numeric(format(date, "%d"))
-  # Define the seasons based on date ranges
-  if ((month == 3 && day >= 20) || (month >= 4 && month <= 6) || (month == 6 && day <= 20)) {
-    return("Spring")
-  } else if ((month == 6 && day >= 21) || (month >= 7 && month <= 9) || (month == 9 && day <= 21)) {
-    return("Summer")
-  } else if ((month == 9 && day >= 22) || (month >= 10 && month <= 12) || (month == 12 && day <= 20)) {
-    return("Fall")
-  } else {
-    return("Winter")
-  }
-}
-
 gage_survey_cleaned <- gage_survey_cleaned |>
   mutate("Season" = sapply(DATE_START,date_to_season))
 
-
-
 ```
+Now on to analysis!
 
 
+To first explore the variables, we will use PCA.
+### PCA
+PCA using prcomp
 ```{r}
 gage_survey_PCA <- gage_survey_cleaned |>
 select(where(is.numeric), -EXECYEAR)
-
-dredge_numeric<-gage_survey_cleaned|>
-   select(where(is.numeric), -EXECYEAR)
-correlations <-cor(dredge_numeric, use = "pairwise.complete.obs")
-corrplot::corrplot(correlations)
 
 dredge_prcomp <- gage_survey_PCA|>
   select(-VOLUMEDREDGED)
 
 dredge_PCA = prcomp(dredge_prcomp, scale = T)
 
-biplot(dredge_PCA)
-
-dredge <-gage_survey_cleaned |>
-  filter(DREDGINGPURPOSE != "None")
-  hist(dredge$VOLUMEDREDGED)
-  
-  median(dredge$VOLUMEDREDGED)
-
-hist(gage_survey_cleaned$VOLUMEDREDGED)
-
 plot(dredge_PCA,  type="l")
 
-autoplot(dredge_PCA,data = gage_survey_cleaned, 
-         color = 'SEASON',loadings = TRUE,
-         loadings.colour = 'black',
-         loadings.label = TRUE, loadings.label.size = 4, 
-         loadings.label.colour = "blue")
+a<-autoplot(dredge_PCA,data = gage_survey_cleaned, 
+         color = 'Season',loadings = FALSE)+
+  ggtitle("Season")
 
 
+b<-autoplot(dredge_PCA,data = gage_survey_cleaned, 
+         color = 'POOL',loadings= FALSE)+
+  ggtitle("River Pool")+
+    guides(color = guide_legend(ncol = 2)) 
+
+
+c<-autoplot(dredge_PCA,data = gage_survey_cleaned, 
+         color = 'RIVER',loadings = FALSE)+
+  ggtitle("River")
+
+d<-autoplot(dredge_PCA,data = gage_survey_cleaned, 
+         color = 'DREDGINGPURPOSE',loadings = FALSE)+
+        ggtitle("Dredging Purpose")+
+  labs(color = "Dredging?")
+
+
+
+ggsave("Initial_Full_PCA.png",grid.arrange(a,b,c,d,ncol = 2),width = 10, height = 8)
 variable_contributions<- dredge_PCA$rotation
 head(variable_contributions)
+```
 
+PCA using Caret
+```{r}
 set.seed(12)
 ctrl = trainControl(method = "cv", number = 5)
 
@@ -211,10 +253,7 @@ varImp(fit_pca)
 variable_contributions = fit_pca$preProcess$rotation
 head(variable_contributions)
 
-# data.frame(variable_contributions) |>
-#   mutate(RIVER = gage_survey_cleaned$RIVER)
-#   gf_point(PC2 ~ PC1)
- 
+
 data.frame(variable_contributions) |>
   gf_text(PC2 ~ PC1,
           label = row.names(variable_contributions))
@@ -236,7 +275,8 @@ data_in_PC_space = data.frame(data_in_PC_space,
                               River = gage_survey_cleaned$RIVER,
                               Pool = gage_survey_cleaned$POOL,
                               DREDGE_TYPE = gage_survey_cleaned$DREDGINGPURPOSE,
-                              Season = gage_survey_cleaned$Season)
+                              Season = gage_survey_cleaned$Season,
+                              Dredge_Volume = gage_survey_cleaned$VOLUMEDREDGED)
 
 data.frame(data_in_PC_space)|>
   gf_point(PC2 ~ PC1, col = ~ Season)
@@ -259,15 +299,6 @@ var_df <- data.frame(pve, PC = 1:length(pve),
 var_df|>
   gf_point(cum_var ~ PC) |>
   gf_line(cum_var ~ PC)
-
-pca_scores <-dredge_PCA$x
-pca_loadings <- dredge_PCA$rotation
-
-
-
-
-
-
 ```
 
 ###xgBoost
@@ -275,7 +306,7 @@ pca_loadings <- dredge_PCA$rotation
 library(xgboost)
 gage_xgb <- gage_survey_cleaned |>
   select(-lead_7, -lead_14,-DATE_START,
-         -SURVEYJOBIDPK,-EXECYEAR,-DREDGE_TYPE,
+         -EXECYEAR,-DREDGE_TYPE,
          -DREDGINGPURPOSE)|>
     mutate_if(is.character, factor)
  
@@ -300,6 +331,7 @@ fit_dredge
 import_matrix = xgb.importance(model = fit_dredge$finalModel)
 import_matrix
 xgb.plot.importance(import_matrix)
+
 ```
 ###Cross Validation of Model
 ```{r}
@@ -356,7 +388,7 @@ sqrt(mean((cv_pred - gage_xgb$VOLUMEDREDGED)^2)) # This is the most honest
 
 ### Cleaning the data 
 ```{r}
-combined_data <- bind_rows(survey_Data, dredge_data_cleaning)
+combined_data <- bind_rows(survey_data, dredge_data)
 
 combined_data <-combined_data |>
      filter(DATE_START >= as.Date("1999-04-01") &
@@ -371,16 +403,30 @@ Nas<- combined_data|>
 gage_survey <- combined_data |>
   left_join(gage_data, by = "DATE_START")
 
+gage_IWW <- gage_data |>
+  select(DATE_START,BEAI2,HAVI2,
+         HNYI2,IL03, IL03_Tail, IL04, IL04_Tail, IL05, IL05_Tail,IL06, IL06_Tail,
+         IL07, IL07_Tail, IL08, IL08_Tail,KNGI2, MORI2, PIAI2)
+
+gage_Miss <- gage_data |>
+  select(DATE_START,BRLI4,CMMI4, DBQI4,
+         FAII4, KHBI2,MI11,MI11_Tail,MI12,MI12_Tail,MI13,MI13_Tail,MI14,MI14_Tail,
+         MI15,MI15_Tail,MI16,MI16_Tail,MI17,MI17_Tail,MI18,MI18_Tail,MI19,MI19_Tail,
+         MI20,MI20_Tail,MI21,MI21_Tail,MI22,MI22_Tail, MUSI4,UINI2)
+
+
+
 Illinois_River <- gage_survey |>
-  select(SURVEYJOBIDPK,EXECYEAR,DATE_START,DREDGINGPURPOSE,VOLUMEDREDGED,RIVER,
+  select(EXECYEAR,DATE_START,DREDGINGPURPOSE,VOLUMEDREDGED,RIVER,
          POOL, DREDGE_TYPE,UP_RIV_MIL, DN_RIV_MIL,lead_7,lead_14,BEAI2,HAVI2,
          HNYI2,IL03, IL03_Tail, IL04, IL04_Tail, IL05, IL05_Tail,IL06, IL06_Tail,
          IL07, IL07_Tail, IL08, IL08_Tail,KNGI2, MORI2, PIAI2) |>
   filter(RIVER == "Illinois_Waterway")
-         
+
+   
 
 Miss_River <- gage_survey |>
-  select(SURVEYJOBIDPK,EXECYEAR,DATE_START,DREDGINGPURPOSE,VOLUMEDREDGED,RIVER,
+  select(EXECYEAR,DATE_START,DREDGINGPURPOSE,VOLUMEDREDGED,RIVER,
          POOL, DREDGE_TYPE,UP_RIV_MIL, DN_RIV_MIL,lead_7,lead_14,BRLI4,CMMI4, DBQI4,
          FAII4, KHBI2,MI11,MI11_Tail,MI12,MI12_Tail,MI13,MI13_Tail,MI14,MI14_Tail,
          MI15,MI15_Tail,MI16,MI16_Tail,MI17,MI17_Tail,MI18,MI18_Tail,MI19,MI19_Tail,
@@ -388,12 +434,12 @@ Miss_River <- gage_survey |>
   filter(RIVER == "Mississippi_River")
 
 Miss_full <- Miss_River|>  
-  left_join(gage_data, by = c("lead_7" = "DATE_START"), suffix = c("", "_7"))|>
-  left_join(gage_data, by = c("lead_14" = "DATE_START"), suffix = c("","_14"))
+  left_join(gage_Miss, by = c("lead_7" = "DATE_START"), suffix = c("", "_7"))|>
+  left_join(gage_Miss, by = c("lead_14" = "DATE_START"), suffix = c("","_14"))
 
 IWW_full <- Illinois_River|>  
-  left_join(gage_data, by = c("lead_7" = "DATE_START"), suffix = c("", "_7"))|>
-  left_join(gage_data, by = c("lead_14" = "DATE_START"), suffix = c("","_14"))
+  left_join(gage_IWW, by = c("lead_7" = "DATE_START"), suffix = c("", "_7"))|>
+  left_join(gage_IWW, by = c("lead_14" = "DATE_START"), suffix = c("","_14"))
 
 
 Miss_Cleaned <- Miss_full |>
@@ -411,18 +457,183 @@ Miss_Cleaned <- Miss_Cleaned |>
 
 ```
 
-## PCA
+## IWW PCA
 ```{r}
+IWW_PCA <- IWW_Cleaned |>
+select(where(is.numeric), -EXECYEAR)
 
+IWW_prcomp <- IWW_PCA|>
+  select(-VOLUMEDREDGED)
+
+IWW_PCA = prcomp(IWW_prcomp, scale = T)
+
+biplot(IWW_PCA)
+
+plot(IWW_PCA,  type="l")
+
+autoplot(IWW_PCA,data = IWW_Cleaned, 
+         color = 'Season',loadings = TRUE,
+         loadings.colour = 'black',
+         loadings.label = TRUE, loadings.label.size = 4, 
+         loadings.label.colour = "blue")
+
+PCAvalues <- data.frame(Pool = IWW_Cleaned$POOL,
+                        Dredge_Type = IWW_Cleaned$DREDGE_TYPE,
+                        Season = IWW_Cleaned$Season,
+                        Dredge_Occurance = IWW_Cleaned$DREDGINGPURPOSE,
+                        IWW_PCA$x)
+
+explained_variance <- (IWW_PCA$sdev^2) / sum(IWW_PCA$sdev^2) * 100
+
+# Extract PC1 and PC2 explained variance
+PC1_explained <- explained_variance[1]
+PC2_explained <- explained_variance[2]
+
+# Extract loadings of the variables
+PCAloadings <- data.frame(Variables = rownames(IWW_PCA$rotation), IWW_PCA$rotation)
+
+
+PCAloadings_PC1 <- PCAloadings|>
+  arrange(desc(abs(PC1))) |>
+  slice_head(n=10)
+  
+PCAloadings_PC2 <- PCAloadings|>
+  arrange(desc(abs(PC2))) |>
+  slice_head(n=10)
+  
+top_loadings <- bind_rows(PCAloadings_PC1, PCAloadings_PC2)
+
+# Plot PCA with top 10 loadings
+ggplot(PCAvalues, aes(x = PC1, y = PC2, colour = Season)) +
+  geom_point(size = 2) +
+  geom_segment(data = top_loadings, aes(x = 0, y = 0, xend = PC1 * 75, yend = PC2 * 75),
+               arrow = arrow(length = unit(1/2, "picas")), color = "black") +  
+  annotate("text", x = top_loadings$PC1 * 80, y = top_loadings$PC2 * 80,
+           label = top_loadings$Variables, hjust = 0.2, vjust = 0.4) +  
+  theme_minimal() +
+  labs(title = "PCA Plot with Top 10 Loadings for PC1 and PC2",
+      x = paste("PC1 (", round(PC1_explained, 1), "%)", sep = ""),
+       y = paste("PC2 (", round(PC2_explained, 1), "%)", sep = ""))
+
+ggplot(PCAvalues, aes(x = PC1, y = PC2, colour = Pool)) +
+  geom_point(size = 2) +
+  geom_segment(data = top_loadings, aes(x = 0, y = 0, xend = PC1 * 75, yend = PC2 * 75),
+               arrow = arrow(length = unit(1/2, "picas")), color = "black") +  
+  annotate("text", x = top_loadings$PC1 * 80, y = top_loadings$PC2 * 80,
+           label = top_loadings$Variables, hjust = 0.2, vjust = 0.4) +  
+  theme_minimal() +
+  labs(title = "PCA Plot with Top 10 Loadings for PC1 and PC2",
+      x = paste("PC1 (", round(PC1_explained, 1), "%)", sep = ""),
+       y = paste("PC2 (", round(PC2_explained, 1), "%)", sep = ""))
+
+
+ggplot(PCAvalues, aes(x = PC1, y = PC2, colour = Dredge_Type)) +
+  geom_point(size = 2) + 
+  geom_segment(data = top_loadings, aes(x = 0, y = 0, xend = PC1 * 75, yend = PC2 * 75),
+               arrow = arrow(length = unit(1/2, "picas")), color = "black") + 
+  annotate("text", x = top_loadings$PC1 * 80, y = top_loadings$PC2 * 80,
+           label = top_loadings$Variables, hjust = 0.2, vjust = 0.4) +
+  theme_minimal() +
+  labs(title = "PCA Plot with Top 10 Loadings for PC1 and PC2",
+      x = paste("PC1 (", round(PC1_explained, 1), "%)", sep = ""),
+       y = paste("PC2 (", round(PC2_explained, 1), "%)", sep = ""))
+
+
+ggplot(PCAvalues, aes(x = PC1, y = PC2, colour = Dredge_Occurance)) +
+  geom_point(size = 2) + 
+  geom_segment(data = top_loadings, aes(x = 0, y = 0, xend = PC1 * 75, yend = PC2 * 75),
+               arrow = arrow(length = unit(1/2, "picas")), color = "black") +
+  annotate("text", x = top_loadings$PC1 * 80, y = top_loadings$PC2 * 80,
+           label = top_loadings$Variables, hjust = 0.2, vjust = 0.4) + 
+  theme_minimal() +
+  labs(title = "PCA Plot with Top 10 Loadings for PC1 and PC2",
+      x = paste("PC1 (", round(PC1_explained, 1), "%)", sep = ""),
+       y = paste("PC2 (", round(PC2_explained, 1), "%)", sep = ""))
 ```
 
+## Miss PCA 
+```{r}
+Miss_PCA <- Miss_Cleaned |>
+select(where(is.numeric), -EXECYEAR)
+
+Miss_prcomp <- Miss_PCA|>
+  select(-VOLUMEDREDGED)
+
+Miss_PCA = prcomp(Miss_prcomp, scale = T)
+
+biplot(Miss_PCA)
+biplot(Miss_PCA, showLoadings = TRUE,)
+
+plot(Miss_PCA,  type="l")
+
+PCAvalues <- data.frame(Pool = Miss_Cleaned$POOL,
+                        Dredge_Type = Miss_Cleaned$DREDGE_TYPE,
+                        Season = Miss_Cleaned$Season,
+                        Dredge_Occurance = Miss_Cleaned$DREDGINGPURPOSE,
+                        Miss_PCA$x)
+
+explained_variance <- (Miss_PCA$sdev^2) / sum(Miss_PCA$sdev^2) * 100
+
+# Extract PC1 and PC2 explained variance
+PC1_explained <- explained_variance[1]
+PC2_explained <- explained_variance[2]
+
+# Extract loadings of the variables
+PCAloadings <- data.frame(Variables = rownames(Miss_PCA$rotation), Miss_PCA$rotation)
+
+
+PCAloadings_PC1 <- PCAloadings|>
+  arrange(desc(abs(PC1))) |>
+  slice_head(n=10)
+  
+PCAloadings_PC2 <- PCAloadings|>
+  arrange(desc(abs(PC2))) |>
+  slice_head(n=10)
+  
+top_loadings <- bind_rows(PCAloadings_PC1, PCAloadings_PC2)
+
+# Plot PCA with top 10 loadings
+ggplot(PCAvalues, aes(x = PC1, y = PC2, colour = Season)) +
+  geom_point(size = 2) +  # Scatter plot
+  geom_segment(data = top_loadings, aes(x = 0, y = 0, xend = PC1 * 75, yend = PC2 * 75),
+               arrow = arrow(length = unit(1/2, "picas")), color = "black") +  # Vectors for top loadings
+  annotate("text", x = top_loadings$PC1 * 80, y = top_loadings$PC2 * 80,
+           label = top_loadings$Variables, hjust = 0.2, vjust = 0.4) +  # Labels for top loadings
+  theme_minimal() +
+  labs(title = "PCA Plot with Top 10 Loadings for PC1 and PC2",
+      x = paste("PC1 (", round(PC1_explained, 1), "%)", sep = ""),
+       y = paste("PC2 (", round(PC2_explained, 1), "%)", sep = ""))
+
+ggplot(PCAvalues, aes(x = PC1, y = PC2, colour = Pool)) +
+  geom_point(size = 2) +  # Scatter plot
+  geom_segment(data = top_loadings, aes(x = 0, y = 0, xend = PC1 * 75, yend = PC2 * 75),
+               arrow = arrow(length = unit(1/2, "picas")), color = "black") +  # Vectors for top loadings
+  annotate("text", x = top_loadings$PC1 * 80, y = top_loadings$PC2 * 80,
+           label = top_loadings$Variables, hjust = 0.2, vjust = 0.4) +  # Labels for top loadings
+  theme_minimal() +
+  labs(title = "PCA Plot with Top 10 Loadings for PC1 and PC2",
+      x = paste("PC1 (", round(PC1_explained, 1), "%)", sep = ""),
+       y = paste("PC2 (", round(PC2_explained, 1), "%)", sep = ""))
+
+ggplot(PCAvalues, aes(x = PC1, y = PC2, colour = Dredge_Type)) +
+  geom_point(size = 2) +  # Scatter plot
+  geom_segment(data = top_loadings, aes(x = 0, y = 0, xend = PC1 * 75, yend = PC2 * 75),
+               arrow = arrow(length = unit(1/2, "picas")), color = "black") +  # Vectors for top loadings
+  annotate("text", x = top_loadings$PC1 * 80, y = top_loadings$PC2 * 80,
+           label = top_loadings$Variables, hjust = 0.2, vjust = 0.4) +  # Labels for top loadings
+  theme_minimal() +
+  labs(title = "PCA Plot with Top 10 Loadings for PC1 and PC2",
+      x = paste("PC1 (", round(PC1_explained, 1), "%)", sep = ""),
+       y = paste("PC2 (", round(PC2_explained, 1), "%)", sep = ""))
+
+```
 
 ## xgboost split by river
 #Miss
 ```{r}
 Miss_xgb <-Miss_Cleaned |>
   select(-lead_7, -lead_14,-DATE_START,
-         -SURVEYJOBIDPK,-EXECYEAR,-DREDGE_TYPE,
+         -EXECYEAR,-DREDGE_TYPE,
          -DREDGINGPURPOSE, -RIVER)|>
     mutate_if(is.character, factor)
  
@@ -453,7 +664,7 @@ xgb.plot.importance(import_matrix)
 ```{r}
 IWW_xgb <-IWW_Cleaned |>
   select(-lead_7, -lead_14,-DATE_START,
-         -SURVEYJOBIDPK,-EXECYEAR,-DREDGE_TYPE,
+         -EXECYEAR,-DREDGE_TYPE,
          -DREDGINGPURPOSE, -RIVER)|>
     mutate_if(is.character, factor)
  
