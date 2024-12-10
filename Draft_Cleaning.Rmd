@@ -11,6 +11,7 @@ library(lubridate)
 library(caret)
 library(ggfortify)
 library(ggformula)
+library(DiagrammeR)
 
 dredge_data<-read_csv("DredgeData.csv")
 survey_data<-read_csv("SurveyData.csv")
@@ -161,6 +162,11 @@ dredge_PCA = prcomp(dredge_prcomp, scale = T)
 
 biplot(dredge_PCA)
 
+plot(dredge_PCA,  type="l")
+
+autoplot(dredge_PCA)
+
+
 variable_contributions<- dredge_PCA$rotation
 head(variable_contributions)
 
@@ -179,30 +185,69 @@ varImp(fit_pca)
 variable_contributions = fit_pca$preProcess$rotation
 head(variable_contributions)
 
-data.frame(variable_contributions) |>
-  gf_point(PC2 ~ PC1)
+# data.frame(variable_contributions) |>
+#   mutate(RIVER = gage_survey_cleaned$RIVER)
+#   gf_point(PC2 ~ PC1)
  
 data.frame(variable_contributions) |>
   gf_text(PC2 ~ PC1,
           label = row.names(variable_contributions))
 
+data.frame(variable_contributions) |>
+  filter(abs(PC1) > 0.11)
+
 predictor_matrix <- gage_survey_PCA |>
-  dplyr::select(-VOLUMEDREDGED) %>% # Remove the response variable
-  as.matrix() %>%
+  dplyr::select(-VOLUMEDREDGED) |> # Remove the response variable
+  as.matrix() |>
   scale() #centers and scales
+
+
 
 # The symbol %*% does matrix multiplication
 data_in_PC_space = predictor_matrix %*% variable_contributions
 
-data.frame(data_in_PC_space) %>%
-  gf_point(PC2 ~ PC1)
+data_in_PC_space = data.frame(data_in_PC_space,
+                              River = gage_survey_cleaned$RIVER,
+                              Pool = gage_survey_cleaned$POOL,
+                              DREDGE_TYPE = gage_survey_cleaned$DREDGINGPURPOSE,
+                              Season = gage_survey_cleaned$Season)
+
+data.frame(data_in_PC_space)|>
+  gf_point(PC2 ~ PC1, col = ~ Season)
+
+data.frame(data_in_PC_space)|>
+  gf_point(PC2 ~ PC1, col = ~DREDGE_TYPE)
+
+
+### Scree Plot
+data_in_PC_space = predictor_matrix %*% variable_contributions
+var_explained = apply(data_in_PC_space,2,var)
+pve = var_explained/sum(var_explained)
+pve
+
+cumsum(pve)
+
+var_df <- data.frame(pve, PC = 1:length(pve),
+                     cum_var = cumsum(pve))
+
+var_df|>
+  gf_point(cum_var ~ PC) |>
+  gf_line(cum_var ~ PC)
+
+pca_scores <-dredge_PCA$x
+pca_loadings <- dredge_PCA$rotation
+
+
+
+
+
 
 ```
 
 ###xgBoost
 ```{r}
 library(xgboost)
-gage_xgb <- gage_survey |>
+gage_xgb <- gage_survey_cleaned |>
   select(-lead_7, -lead_14,-DATE_START,
          -SURVEYJOBIDPK,-EXECYEAR,-DREDGE_TYPE,
          -DREDGINGPURPOSE)|>
@@ -212,15 +257,17 @@ ctrl = trainControl(method = "cv", number = 10)
 fit_dredge = train(VOLUMEDREDGED ~ .,
                  data = gage_xgb,
                  method = "xgbTree",
-                 tuneGrid = expand.grid(nrounds = c (15,25,50,100), max_depth = 1:10,
-                                        eta = 0.3, gamma = 0,
-                                        colsample_bytree = .8,
+               tuneGrid = expand.grid(nrounds = c (15,25,50,100), 
+                                              max_depth = 1:10,
+                                        eta =c(0.3), gamma = 0,
+                                        colsample_bytree = 1,
                                         min_child_weight = 1, subsample = 1),
                  verbosity = 0,
                  trControl = ctrl,
                  na.action = na.exclude)
 
 varImp(fit_dredge)
+xgb.plot.tree(model = fit_dredge$finalModel, trees = 0)
 
 fit_dredge
 
@@ -249,54 +296,20 @@ for(ii in 1:n_outer_folds){
   fit_dredge_DCV = train(VOLUMEDREDGED ~ .,
                        data = gage_xgb[in_train, ],
                        method = "xgbTree",
-                       tuneGrid = expand.grid(nrounds = c (15,25,50,100), max_depth = 1:10,
-                                        eta = 0.3, gamma = 0,
+                       tuneGrid = expand.grid(nrounds = c (15,25,50,100), 
+                                              max_depth = 1:10,
+                                        eta =c(0.3), gamma = 0,
                                         colsample_bytree = 1,
                                         min_child_weight = 1, subsample = 1),
                        verbosity = 0,
                        trControl = ctrl,
                        na.action = na.exclude)
-
  
   # "Frankenstein" vector of predictions
   cv_pred[in_test] = predict(fit_dredge_DCV,
                              newdata = gage_xgb[in_test, ])
  
 }
-
-tune_grid <- expand.grid(
-  nrounds = c(50, 100, 150), 
-  max_depth = c(3, 6, 9), 
-  eta = c(0.1, 0.2, 0.3), 
-  gamma = 0, 
-  colsample_bytree = 0.8, 
-  min_child_weight =1, 
-  subsample = c(0.8, 1)
-)
-
-set.seed(123)
-ctrl = trainControl(method = "cv", number = 10, savePredictions = "final")
-
-fit_dredge2 = train(VOLUMEDREDGED ~ .,
-                   data = gage_xgb,
-                   method = "xgbTree",
-                   tuneGrid = tune_grid,
-                   trControl = ctrl,
-                   na.action = na.exclude)
-
-# Model performance
-fit_dredge2
-
-# Model evaluation
-predictions <- fit_dredge2$pred  # Predictions from cross-validation
-head(predictions)
-
-# RMSE, R-Squared, etc.
-cv_rmse <- sqrt(mean((predictions$obs - predictions$pred)^2))
-cv_r2 <- cor(predictions$obs, predictions$pred)^2
-
-cat("RMSE: ", cv_rmse, "\n")
-cat("R-Squared: ", cv_r2, "\n")
 
 
 ##Og
@@ -311,10 +324,126 @@ print(confusion_matrix)
 # RMSE
 sqrt(mean((cv_pred - gage_xgb$VOLUMEDREDGED)^2)) # This is the most honest
                                          # assessment of accuracy
-
-
-
-dredge_data_cleaning|>
-  group_by(POOL)|>
-  summarize(count())
 ```
+
+## Well that didnt work! Lets try modeling between the two river systems 
+```{r}
+combined_data <- bind_rows(survey_Data, dredge_data_cleaning)
+
+combined_data <-combined_data |>
+     filter(DATE_START >= as.Date("1999-04-01") &
+         DATE_START <= as.Date("2021-09-30"))
+
+combined_data <-combined_data |>
+  mutate(lead_7 = (DATE_START - 7),
+         lead_14 = (DATE_START - 14))
+Nas<- combined_data|>
+  filter(if_any(everything(),is.na))
+
+gage_survey <- combined_data |>
+  left_join(gage_data2, by = "DATE_START")
+
+Illinois_River <- gage_survey |>
+  select(SURVEYJOBIDPK,EXECYEAR,DATE_START,DREDGINGPURPOSE,VOLUMEDREDGED,RIVER,
+         POOL, DREDGE_TYPE,UP_RIV_MIL, DN_RIV_MIL,lead_7,lead_14,BEAI2,HAVI2,
+         HNYI2,IL03, IL03_Tail, IL04, IL04_Tail, IL05, IL05_Tail,IL06, IL06_Tail,
+         IL07, IL07_Tail, IL08, IL08_Tail,KNGI2, MORI2, PIAI2) |>
+  filter(RIVER == "Illinois_Waterway")
+         
+
+Miss_River <- gage_survey |>
+  select(SURVEYJOBIDPK,EXECYEAR,DATE_START,DREDGINGPURPOSE,VOLUMEDREDGED,RIVER,
+         POOL, DREDGE_TYPE,UP_RIV_MIL, DN_RIV_MIL,lead_7,lead_14,BRLI4,CMMI4, DBQI4,
+         FAII4, KHBI2,MI11,MI11_Tail,MI12,MI12_Tail,MI13,MI13_Tail,MI14,MI14_Tail,
+         MI15,MI15_Tail,MI16,MI16_Tail,MI17,MI17_Tail,MI18,MI18_Tail,MI19,MI19_Tail,
+         MI20,MI20_Tail,MI21,MI21_Tail,MI22,MI22_Tail, MUSI4,UINI2) |>
+  filter(RIVER == "Mississippi_River")
+
+Miss_full <- Miss_River|>  
+  left_join(gage_data2, by = c("lead_7" = "DATE_START"), suffix = c("", "_7"))|>
+  left_join(gage_data2, by = c("lead_14" = "DATE_START"), suffix = c("","_14"))
+
+IWW_full <- Illinois_River|>  
+  left_join(gage_data2, by = c("lead_7" = "DATE_START"), suffix = c("", "_7"))|>
+  left_join(gage_data2, by = c("lead_14" = "DATE_START"), suffix = c("","_14"))
+
+
+Miss_Cleaned <- Miss_full |>
+  filter(complete.cases(Miss_full))
+
+IWW_Cleaned <- IWW_full |>
+  filter(complete.cases(IWW_full))
+
+IWW_Cleaned <- IWW_Cleaned |>
+  mutate("Season" = sapply(DATE_START,date_to_season))
+
+
+Miss_Cleaned <- Miss_Cleaned |>
+  mutate("Season" = sapply(DATE_START,date_to_season))
+
+```
+
+
+## xgboost split by river
+#Miss
+```{r}
+Miss_xgb <-Miss_Cleaned |>
+  select(-lead_7, -lead_14,-DATE_START,
+         -SURVEYJOBIDPK,-EXECYEAR,-DREDGE_TYPE,
+         -DREDGINGPURPOSE, -RIVER)|>
+    mutate_if(is.character, factor)
+ 
+ctrl = trainControl(method = "cv", number = 10) 
+Miss_xgb_fit = train(VOLUMEDREDGED ~ .,
+                 data = Miss_xgb,
+                 method = "xgbTree",
+               tuneGrid = expand.grid(nrounds = c(15,25,50,100), 
+                                              max_depth = 1:10,
+                                        eta =c(0.3), gamma = 0,
+                                        colsample_bytree = 1,
+                                        min_child_weight = 1, subsample = 1),
+                 verbosity = 0,
+                 trControl = ctrl,
+                 na.action = na.exclude)
+
+varImp(Miss_xgb_fit)
+xgb.plot.tree(model = Miss_xgb_fit$finalModel, trees = 0)
+
+Miss_xgb_fit
+
+import_matrix = xgb.importance(model = Miss_xgb_fit$finalModel)
+import_matrix
+xgb.plot.importance(import_matrix)
+```
+
+#IWW
+```{r}
+IWW_xgb <-IWW_Cleaned |>
+  select(-lead_7, -lead_14,-DATE_START,
+         -SURVEYJOBIDPK,-EXECYEAR,-DREDGE_TYPE,
+         -DREDGINGPURPOSE, -RIVER)|>
+    mutate_if(is.character, factor)
+ 
+ctrl = trainControl(method = "cv", number = 10) 
+IWW_xgb_fit = train(VOLUMEDREDGED ~ .,
+                 data = IWW_xgb,
+                 method = "xgbTree",
+               tuneGrid = expand.grid(nrounds = c(15,25,50,100), 
+                                              max_depth = 1:10,
+                                        eta =c(0.3), gamma = 0,
+                                        colsample_bytree = 1,
+                                        min_child_weight = 1, subsample = 1),
+                 verbosity = 0,
+                 trControl = ctrl,
+                 na.action = na.exclude)
+
+varImp(IWW_xgb_fit)
+xgb.plot.tree(model = IWW_xgb_fit$finalModel, trees = 0)
+
+IWW_xgb_fit
+
+import_matrix = xgb.importance(model = IWW_xgb_fit$finalModel)
+import_matrix
+xgb.plot.importance(import_matrix)
+```
+
