@@ -13,6 +13,8 @@ library(ggfortify)
 library(ggformula)
 library(DiagrammeR)
 library(gridExtra)
+library(keras)
+library(tensorflow)
 
 
 ### Key Functions 
@@ -51,12 +53,11 @@ date_to_season <- function(date) {
 
 ```
 
-
 ### Read in the data
 ```{r}
 dredge_data<-read_csv("DredgeData.csv", show_col_types = FALSE)
 survey_data<-read_csv("SurveyData.csv", show_col_types = FALSE)
-gage_data<-read_csv("UMR_IWW_1999_2021.csv", show_col_types = FALSE)
+gage_data<-read_csv("UMR_IWW_1999_2024.csv", show_col_types = FALSE)
 ```
 
 ### Clean the gage data 
@@ -84,7 +85,7 @@ gage_data<-gage_data|>
 
 ### Cleaning the data
 Now lets clean the survey data. I only want conditional survey records between
-1999 to 2000, these are going to act as my background data. I want to combine
+1999 to 2022, these are going to act as my background data. I want to combine
 these records with my dredge data. I'm also going to filter by river, remove
 pools that are not of interest, and create some 
 columns to support my join. Dates are also formatted as date objects and some
@@ -94,7 +95,7 @@ data.
 ```{r}
 survey_data<- survey_data |>
   filter(SURVEYTYPE == "conditional",
-         SURVEY_YEAR >= 1999 & SURVEY_YEAR <= 2022,
+         SURVEY_YEAR >= 1999 & SURVEY_YEAR <= 2024,
           RIVER == "Mississippi_River" | RIVER == "Illinois_Waterway",
          !POOL %in% c("LP","CS"))|>
   mutate(VOLUMEDREDGED = 0,
@@ -116,7 +117,7 @@ and since the dredge records only go back to 1999, we just need to filter out da
 dredge_data <- dredge_data |>
    filter(
           DREDGINGPURPOSE != "harbor",
-           EXECYEAR <= 2022)|>
+           EXECYEAR <= 2024)|>
   mutate(
      DATE_START = as_date(mdy_hm(DATE_START)))|>
   select(EXECYEAR,DREDGINGPURPOSE, VOLUMEDREDGED, RIVER,POOL, DREDGE_TYPE,
@@ -129,7 +130,7 @@ combined_data <- bind_rows(survey_data, dredge_data)
 
 combined_data <-combined_data |>
      filter(DATE_START >= as.Date("1999-04-01") &
-         DATE_START <= as.Date("2021-09-30")) |>
+         DATE_START <= as.Date("2024-12-31")) |>
           mutate( DREDGINGPURPOSE = case_when(DREDGINGPURPOSE == "None" ~ "No Dredging",
                                       DREDGINGPURPOSE == "channel" ~ "Dredged"))
 
@@ -162,6 +163,8 @@ gf_histogram(~NA_by_row)
 
 gage_survey_filt <- gage_survey |>
   filter(complete.cases(gage_survey))
+
+write_csv(gage_survey_filt,"Gage_Survey_Dredge.csv")
 ```
 
 Join the gage data by the 7 day prior observations and by the 14 day prior observations
@@ -192,6 +195,57 @@ gage_survey_cleaned <- gage_survey_cleaned |>
   mutate("Season" = sapply(DATE_START,date_to_season))
 
 ```
+
+Lets make some plots of the data!
+```{r}
+gages_pivoted <- gage_data|>
+    pivot_longer(cols = -DATE_START, 
+               names_to = "gage", 
+               values_to = "value")
+
+
+
+gage_survey_cleaned |>
+  ggplot(aes(y=VOLUMEDREDGED, x=DATE_START))+
+  geom_line()
+
+gages_pivoted |>
+  ggplot(aes(y = value, x = DATE_START, color = gage, group = gage)) +
+  geom_line(size = 1) +  # Adjust line thickness
+  scale_color_viridis_d() +  # A color scale that's visually appealing
+  labs(
+    title = "Time Series of Gage Values",
+    x = "Date",
+    y = "Value",
+    color = "Gage"
+  ) +  # Adding titles and labels
+  theme_minimal() +  # Use a minimal theme
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for better readability
+    axis.title = element_text(size = 12),  # Increase title font size
+    legend.position = "right",  # Position the legend on the right
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+```
+
+```{r}
+gage_survey |>
+  filter(RIVER == "Mississippi_River")|>
+  ggplot(aes(y=VOLUMEDREDGED, x=DATE_START,color = POOL))+
+  geom_point()+
+  labs(title = "Miss Dredging")
+
+gage_survey |>
+  filter(RIVER == "Illinois_Waterway")|>
+  ggplot(aes(y=VOLUMEDREDGED, x=DATE_START, color = POOL))+
+  geom_point()+
+  labs(title = "IWW Dredging")
+
+```
+
+
+
 Now on to analysis!
 
 
@@ -241,7 +295,7 @@ PCA using Caret
 set.seed(12)
 ctrl = trainControl(method = "cv", number = 5)
 
-fit_pca = train(VOLUMEDREDGED ~ .,
+fit_pca = caret::train(VOLUMEDREDGED ~ .,
             data = gage_survey_PCA,
             method = "glm",
             preProc = c("pca"),
@@ -311,7 +365,7 @@ gage_xgb <- gage_survey_cleaned |>
     mutate_if(is.character, factor)
  
 ctrl = trainControl(method = "cv", number = 5) 
-fit_dredge = train(VOLUMEDREDGED ~ .,
+fit_dredge = caret::train(VOLUMEDREDGED ~ .,
                  data = gage_xgb,
                  method = "xgbTree",
                tuneGrid = expand.grid(nrounds = c (15,25,50,100), 
@@ -351,7 +405,7 @@ for(ii in 1:n_outer_folds){
  
  
   ctrl = trainControl(method = "cv", number = 5)
-  fit_dredge_DCV = train(VOLUMEDREDGED ~ .,
+  fit_dredge_DCV = caret::train(VOLUMEDREDGED ~ .,
                        data = gage_xgb[in_train, ],
                        method = "xgbTree",
                        tuneGrid = expand.grid(nrounds = c (15,25,50,100), 
@@ -392,7 +446,7 @@ combined_data <- bind_rows(survey_data, dredge_data)
 
 combined_data <-combined_data |>
      filter(DATE_START >= as.Date("1999-04-01") &
-         DATE_START <= as.Date("2021-09-30"))
+         DATE_START <= as.Date("2024-12-31"))
 
 combined_data <-combined_data |>
   mutate(lead_7 = (DATE_START - 7),
@@ -406,13 +460,14 @@ gage_survey <- combined_data |>
 gage_IWW <- gage_data |>
   select(DATE_START,BEAI2,HAVI2,
          HNYI2,IL03, IL03_Tail, IL04, IL04_Tail, IL05, IL05_Tail,IL06, IL06_Tail,
-         IL07, IL07_Tail, IL08, IL08_Tail,KNGI2, MORI2, PIAI2)
+         IL07, IL07_Tail, IL08, IL08_Tail,KNGI2, MORI2, PIAI2,"05552500","05527500",
+         "05585000","05583000","05570000","05555300")
 
 gage_Miss <- gage_data |>
   select(DATE_START,BRLI4,CMMI4, DBQI4,
          FAII4, KHBI2,MI11,MI11_Tail,MI12,MI12_Tail,MI13,MI13_Tail,MI14,MI14_Tail,
          MI15,MI15_Tail,MI16,MI16_Tail,MI17,MI17_Tail,MI18,MI18_Tail,MI19,MI19_Tail,
-         MI20,MI20_Tail,MI21,MI21_Tail,MI22,MI22_Tail, MUSI4,UINI2)
+         MI20,MI20_Tail,MI21,MI21_Tail,MI22,MI22_Tail, MUSI4,UINI2,"05446500")
 
 
 
@@ -420,7 +475,8 @@ Illinois_River <- gage_survey |>
   select(EXECYEAR,DATE_START,DREDGINGPURPOSE,VOLUMEDREDGED,RIVER,
          POOL, DREDGE_TYPE,UP_RIV_MIL, DN_RIV_MIL,lead_7,lead_14,BEAI2,HAVI2,
          HNYI2,IL03, IL03_Tail, IL04, IL04_Tail, IL05, IL05_Tail,IL06, IL06_Tail,
-         IL07, IL07_Tail, IL08, IL08_Tail,KNGI2, MORI2, PIAI2) |>
+         IL07, IL07_Tail, IL08, IL08_Tail,KNGI2, MORI2, PIAI2,"05552500","05527500",
+         "05585000","05583000","05570000","05555300") |>
   filter(RIVER == "Illinois_Waterway")
 
    
@@ -430,7 +486,7 @@ Miss_River <- gage_survey |>
          POOL, DREDGE_TYPE,UP_RIV_MIL, DN_RIV_MIL,lead_7,lead_14,BRLI4,CMMI4, DBQI4,
          FAII4, KHBI2,MI11,MI11_Tail,MI12,MI12_Tail,MI13,MI13_Tail,MI14,MI14_Tail,
          MI15,MI15_Tail,MI16,MI16_Tail,MI17,MI17_Tail,MI18,MI18_Tail,MI19,MI19_Tail,
-         MI20,MI20_Tail,MI21,MI21_Tail,MI22,MI22_Tail, MUSI4,UINI2) |>
+         MI20,MI20_Tail,MI21,MI21_Tail,MI22,MI22_Tail, MUSI4,UINI2,"05446500") |>
   filter(RIVER == "Mississippi_River")
 
 Miss_full <- Miss_River|>  
@@ -638,7 +694,7 @@ Miss_xgb <-Miss_Cleaned |>
     mutate_if(is.character, factor)
  
 ctrl = trainControl(method = "cv", number = 10) 
-Miss_xgb_fit = train(VOLUMEDREDGED ~ .,
+Miss_xgb_fit = caret::train(VOLUMEDREDGED ~ .,
                  data = Miss_xgb,
                  method = "xgbTree",
                tuneGrid = expand.grid(nrounds = c(15,25,50,100), 
@@ -669,7 +725,7 @@ IWW_xgb <-IWW_Cleaned |>
     mutate_if(is.character, factor)
  
 ctrl = trainControl(method = "cv", number = 10) 
-IWW_xgb_fit = train(VOLUMEDREDGED ~ .,
+IWW_xgb_fit = caret::train(VOLUMEDREDGED ~ .,
                  data = IWW_xgb,
                  method = "xgbTree",
                tuneGrid = expand.grid(nrounds = c(15,25,50,100), 
@@ -689,5 +745,112 @@ IWW_xgb_fit
 import_matrix = xgb.importance(model = IWW_xgb_fit$finalModel)
 import_matrix
 xgb.plot.importance(import_matrix)
+```
+###LSTM
+```{r}
+library(tensorflow)
+library(keras)
+model_7 <- keras_model_sequential() |>
+  layer_lstm(units = 50, return_sequences = TRUE, input_shape = c(7, ncol(gage_xgb) - 1))  |>
+  layer_dropout(rate = 0.2)|>
+  layer_lstm(units = 50, return_sequences = TRUE) |>
+  layer_dropout(rate = 0.2) |>
+  layer_lstm(units = 50) |>
+  layer_dropout(rate = 0.2) |>
+  layer_dense(units = 1)
+
+
+model_7 %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = 'adam'
+)
+
+
+# Function to create sequences based on window size
+create_sequences <- function(data, target_column, sequence_length) {
+  X <- list()
+  y <- list()
+  
+  for (i in (sequence_length + 1):nrow(data)) {
+    X[[i - sequence_length]] <- as.matrix(data[(i - sequence_length):(i - 1), -target_column])  # Features excluding target
+    y[[i - sequence_length]] <- data[i, target_column]  # Target column
+  }
+  
+  X <- array(unlist(X), dim = c(length(X), sequence_length, ncol(data) - 1))  # Reshape to 3D array
+  y <- unlist(y)
+  
+  return(list(X = X, y = y))
+}
+
+# Example: Create sequences for 7-day and 14-day windows
+window_size_7 <- 7
+window_size_14 <- 14
+
+# Load necessary libraries
+library(recipes)
+
+# Assume gage_xgb is your original dataset
+gage_xgb_scaled_recipe <- recipe(~ ., data = gage_xgb) %>%
+  # Define step to scale all numeric predictors
+  step_scale(all_numeric_predictors()) %>%
+  # You can also center them if needed
+  step_center(all_numeric_predictors())
+
+# Prep the recipe
+gage_xgb_prepped <- prep(gage_xgb_scaled_recipe, training = gage_xgb)
+
+# Apply the scaling to the data
+gage_xgb_scaled <- bake(gage_xgb_prepped, new_data = gage_xgb)
+
+# View scaled data
+head(gage_xgb_scaled)
+
+
+
+
+# Assume `gage_xgb_scaled` is your scaled dataset and the target column is 'VOLUMEDREDGED'
+data_windows_7 <- create_sequences(gage_xgb_scaled, target_column = which(names(gage_xgb) == "VOLUMEDREDGED"), sequence_length = window_size_7)
+data_windows_14 <- create_sequences(gage_xgb_scaled, target_column = which(names(gage_xgb) == "VOLUMEDREDGED"), sequence_length = window_size_14)
+
+# X_train and y_train for 7-day window
+X_train_7 <- data_windows_7$X
+y_train_7 <- data_windows_7$y
+
+# X_train and y_train for 14-day window
+X_train_14 <- data_windows_14$X
+y_train_14 <- data_windows_14$y
+
+# Define the train-test split
+train_size_7 <- floor(0.8 * length(y_train_7))  # 80% for training
+train_size_14 <- floor(0.8 * length(y_train_14))  # 80% for training
+
+# Training and Testing Data for 7-day window
+X_train_7_final <- X_train_7[1:train_size_7,,]
+y_train_7_final <- y_train_7[1:train_size_7]
+X_test_7_final <- X_train_7[(train_size_7+1):length(y_train_7),,]
+y_test_7_final <- y_train_7[(train_size_7+1):length(y_train_7)]
+
+# Training and Testing Data for 14-day window
+X_train_14_final <- X_train_14[1:train_size_14,,]
+y_train_14_final <- y_train_14[1:train_size_14]
+X_test_14_final <- X_train_14[(train_size_14+1):length(y_train_14),,]
+y_test_14_final <- y_train_14[(train_size_14+1):length(y_train_14)]
+
+
+# Train the model for the 7-day window
+history_7 <- model_7 %>% fit(
+  X_train_7_final, 
+  y_train_7_final,
+  epochs = 20, 
+  batch_size = 32, 
+  validation_data = list(X_test_7_final, y_test_7_final)
+)
+
+# Evaluate model on 7-day window
+score_7 <- model_7 %>% evaluate(X_test_7_final, y_test_7_final)
+cat('Test loss for 7-day window:', score_7, "\n")
+
+
+predictions_7 <- model_7 %>% predict(X_test_7_final)
 ```
 
