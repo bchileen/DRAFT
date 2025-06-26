@@ -55,6 +55,7 @@ date_to_season <- function(date) {
 
 ### Read in the data
 ```{r}
+CSAT_dredge = read_csv("C:/workspace/DRAFT/CSAT_Data/Dredged_Date_Vol.csv",show_col_types = FALSE)
 dredge_data<-read_csv("DredgeData.csv", show_col_types = FALSE)
 survey_data<-read_csv("SurveyData.csv", show_col_types = FALSE)
 gage_data<-read_csv("UMR_IWW_1999_2024.csv", show_col_types = FALSE)
@@ -99,15 +100,25 @@ survey_data<- survey_data |>
           RIVER == "Mississippi_River" | RIVER == "Illinois_Waterway",
          !POOL %in% c("LP","CS"))|>
   mutate(VOLUMEDREDGED = 0,
-         DREDGINGPURPOSE = "None",
-         DREDGE_TYPE = "None",
-         LABOR_TYPE = LABOR_SOURCE,
          EXECYEAR = SURVEY_YEAR,
-         FEATURENAME = SDSFEATURENAME,
          DATE_START = as.character(DATE_START),
          DATE_START = as_date(DATE_START)
          )|>
-  select(EXECYEAR,DATE_START,DREDGINGPURPOSE,VOLUMEDREDGED, RIVER,POOL, DREDGE_TYPE,
+  select(EXECYEAR,DATE_START,VOLUMEDREDGED, RIVER,POOL, 
+         UP_RIV_MIL,DN_RIV_MIL)
+```
+
+```{r}
+CSAT_dredge_clean <- CSAT_dredge |>
+  mutate(VOLUMEDREDGED = VolumeChange,
+         EXECYEAR = year(Date),
+         DATE_START = SurveyDate,
+         RIVER = case_when(River == "UM" ~"Mississippi_River",
+                           River =="IL" ~ "Illinois_Waterway"), 
+         POOL = Pool,
+         UP_RIV_MIL = mileagestart,
+         DN_RIV_MIL = mileageend)|>
+  select(EXECYEAR,DATE_START,VOLUMEDREDGED,RIVER,POOL, 
          UP_RIV_MIL,DN_RIV_MIL)
 ```
 
@@ -126,13 +137,15 @@ dredge_data <- dredge_data |>
 
 Combine the dredge data and survey data into 1 table. The survey data will act as background/non-dredge data.
 ```{r}
-combined_data <- bind_rows(survey_data, dredge_data)
+combined_data <- bind_rows(survey_data, CSAT_dredge_clean)
 
 combined_data <-combined_data |>
      filter(DATE_START >= as.Date("1999-04-01") &
          DATE_START <= as.Date("2024-12-31")) |>
-          mutate( DREDGINGPURPOSE = case_when(DREDGINGPURPOSE == "None" ~ "No Dredging",
-                                      DREDGINGPURPOSE == "channel" ~ "Dredged"))
+           mutate( 
+          #DREDGINGPURPOSE = case_when(DREDGINGPURPOSE == "None" ~ "No Dredging",
+          #                             DREDGINGPURPOSE == "channel" ~ "Dredged"),
+                  week_of_year = week(DATE_START))
 
 
 combined_data <-combined_data |>
@@ -164,11 +177,22 @@ gf_histogram(~NA_by_row)
 gage_survey_filt <- gage_survey |>
   filter(complete.cases(gage_survey))
 
+gage_survey_full = gage_survey_filt
 write_csv(gage_survey_filt,"Gage_Survey_Dredge.csv")
 ```
 
 Join the gage data by the 7 day prior observations and by the 14 day prior observations
 ```{r}
+gage_survey_filt <- gage_survey_filt |>
+  mutate(
+    lead_7 = as.Date(lead_7),
+    lead_14 = as.Date(lead_14)
+  )
+
+gage_data <- gage_data |>
+  mutate(DATE_START = as.Date(DATE_START))
+
+
 gage_survey_full <- gage_survey_filt|>  
   left_join(gage_data, by = c("lead_7" = "DATE_START"), suffix = c("", "_7"))|>
   left_join(gage_data, by = c("lead_14" = "DATE_START"), suffix = c("","_14"))
@@ -227,6 +251,10 @@ gages_pivoted |>
     legend.title = element_text(size = 12),
     legend.text = element_text(size = 10)
   )
+
+
+gages_pivoted |>
+  ggplot(aes())
 ```
 
 ```{r}
@@ -278,14 +306,18 @@ c<-autoplot(dredge_PCA,data = gage_survey_cleaned,
          color = 'RIVER',loadings = FALSE)+
   ggtitle("River")
 
-d<-autoplot(dredge_PCA,data = gage_survey_cleaned, 
-         color = 'DREDGINGPURPOSE',loadings = FALSE)+
-        ggtitle("Dredging Purpose")+
+# d<-autoplot(dredge_PCA,data = gage_survey_cleaned, 
+#          color = 'DREDGINGPURPOSE',loadings = FALSE)+
+#         ggtitle("Dredging Purpose")+
+#   labs(color = "Dredging?")
+
+e<-autoplot(dredge_PCA,data = gage_survey_cleaned, 
+         color = 'week_of_year',loadings = FALSE)+
+        ggtitle("Week ")+
   labs(color = "Dredging?")
 
 
-
-ggsave("Initial_Full_PCA.png",grid.arrange(a,b,c,d,ncol = 2),width = 10, height = 8)
+ggsave("Initial_Full_PCA.png",grid.arrange(a,b,c,e,ncol = 2),width = 10, height = 8)
 variable_contributions<- dredge_PCA$rotation
 head(variable_contributions)
 ```
@@ -328,15 +360,14 @@ data_in_PC_space = predictor_matrix %*% variable_contributions
 data_in_PC_space = data.frame(data_in_PC_space,
                               River = gage_survey_cleaned$RIVER,
                               Pool = gage_survey_cleaned$POOL,
-                              DREDGE_TYPE = gage_survey_cleaned$DREDGINGPURPOSE,
                               Season = gage_survey_cleaned$Season,
                               Dredge_Volume = gage_survey_cleaned$VOLUMEDREDGED)
 
 data.frame(data_in_PC_space)|>
   gf_point(PC2 ~ PC1, col = ~ Season)
 
-data.frame(data_in_PC_space)|>
-  gf_point(PC2 ~ PC1, col = ~DREDGE_TYPE)
+# data.frame(data_in_PC_space)|>
+#   gf_point(PC2 ~ PC1, col = ~DREDGE_TYPE)
 
 
 ### Scree Plot
@@ -355,27 +386,40 @@ var_df|>
   gf_line(cum_var ~ PC)
 ```
 
-###xgBoost
+
+### xgboost og
 ```{r}
 library(xgboost)
-gage_xgb <- gage_survey_cleaned |>
-  select(-lead_7, -lead_14,-DATE_START,
-         -EXECYEAR,-DREDGE_TYPE,
-         -DREDGINGPURPOSE)|>
+gage_survey_sort <- gage_survey_cleaned|>
+  arrange(DATE_START)  # If DATE_START was dropped, sort gage_survey_cleaned first
+
+gage_xgb <- gage_survey_sort |>
+  select(-lead_7, -lead_14,
+    -DATE_START,
+         -EXECYEAR)|>
     mutate_if(is.character, factor)
+
+gage_xgb_scaled <- gage_xgb |>
+  mutate(across(where(is.numeric), ~ scale(.) |> 
+                  as.data.frame() |>
+                  pull(1), .names = "{.col}"))
  
-ctrl = trainControl(method = "cv", number = 5) 
+
+
+ctrl <- trainControl(
+  method = "timeslice",
+  initialWindow = floor(0.7 * nrow(gage_xgb_scaled)),  # 70% of data for initial training
+  horizon = 1,               # Predict 1 step ahead
+  fixedWindow = TRUE,        # Rolling window
+  verboseIter = TRUE
+)
+
 fit_dredge = caret::train(VOLUMEDREDGED ~ .,
-                 data = gage_xgb,
+                 data = gage_xgb_scaled,
                  method = "xgbTree",
-               tuneGrid = expand.grid(nrounds = c (15,25,50,100), 
-                                              max_depth = 1:10,
-                                        eta =c(0.3), gamma = 0,
-                                        colsample_bytree = 1,
-                                        min_child_weight = 1, subsample = 1),
-                 verbosity = 0,
-                 trControl = ctrl,
-                 na.action = na.exclude)
+                 tuneLength = 10,  # Automatic tuning of hyperparameters
+                 trControl = ctrl
+)
 
 varImp(fit_dredge)
 xgb.plot.tree(model = fit_dredge$finalModel, trees = 0)
@@ -385,12 +429,94 @@ fit_dredge
 import_matrix = xgb.importance(model = fit_dredge$finalModel)
 import_matrix
 xgb.plot.importance(import_matrix)
+```
+
+```{r}
+ggplot(data.frame(Observed = gage_xgb_scaled$VOLUMEDREDGED, Predicted = cv_pred), 
+       aes(x = Observed, y = Predicted)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(x = "Observed", y = "Predicted", title = "Observed vs Predicted")
+```
+
+### xgboost fast
+```{r}
+library(xgboost)
+library(dplyr)
+
+gage_survey_cleaned <- gage_survey_cleaned |>
+  arrange(DATE_START)  # Sort the data by DATE_START
+
+gage_xgb <- gage_survey_cleaned |>
+  select(-lead_7, -lead_14,
+         -DATE_START,
+         -EXECYEAR,
+         -RIVER, -Season) |>
+  mutate_if(is.character, factor)
+
+gage_xgb_scaled <- gage_xgb |>
+  mutate(across(where(is.numeric), ~ scale(.) |> 
+                  as.data.frame() |>
+                  pull(1), .names = "{.col}"))
+
+# 80/20 split for fast test
+n <- nrow(gage_xgb_scaled)
+split_idx <- floor(0.8 * n)
+
+train_data <- gage_xgb_scaled[1:split_idx, ]
+test_data  <- gage_xgb_scaled[(split_idx + 1):n, ]
+
+train_data <- train_data %>%
+  mutate(across(where(is.factor), ~ as.integer(.)))
+
+test_data <- test_data %>%
+  mutate(across(where(is.factor), ~ as.integer(.)))
+
+# Create DMatrix
+dtrain <- xgb.DMatrix(data = as.matrix(train_data %>% select(-VOLUMEDREDGED)),
+                      label = train_data$VOLUMEDREDGED)
+dtest <- xgb.DMatrix(data = as.matrix(test_data %>% select(-VOLUMEDREDGED)))
+
+# Define quick params
+params <- list(
+  objective = "reg:squarederror",
+  eta = 0.3,                # faster learning
+  max_depth = 3,            # shallow trees for speed
+  subsample = 0.8,
+  colsample_bytree = 0.8
+)
+
+# Train with early stopping
+model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 50,             # keep small for fast testing
+  watchlist = list(train = dtrain),
+  early_stopping_rounds = 5,
+  verbose = 0
+)
+
+# Predict and evaluate quickly
+preds <- predict(model, dtest)
+actuals <- test_data$VOLUMEDREDGED
+
+# Quick RMSE
+rmse <- sqrt(mean((actuals - preds)^2))
+cat("Quick Test RMSE:", round(rmse, 3), "\n")
+
+# Feature Importance Plot
+import_matrix <- xgb.importance(model = model)
+xgb.plot.importance(import_matrix)
+
 
 ```
+
 ###Cross Validation of Model
 ```{r}
+library(progress)
+pb <- progress_bar$new(total = n_outer_folds)
 set.seed(123)
-n = nrow(gage_xgb)
+n = nrow(gage_xgb_scaled)
 n_outer_folds = 5
 
 cv_pred = vector(length = n)
@@ -400,42 +526,67 @@ cv_groups = sample(groups, n)
 
 
 for(ii in 1:n_outer_folds){
+  print(Sys.time())
+  pb$tick()
   in_test = (cv_groups == ii)
   in_train = (cv_groups != ii)
  
  
-  ctrl = trainControl(method = "cv", number = 5)
+  ctrl = trainControl(method = "timeslice",
+  initialWindow = 60,   # The first 60 data points for training
+  horizon = 45,         # Forecasting horizon
+  fixedWindow = TRUE,
+  verboseIter=TRUE # Slide the window forward after each step
+)
   fit_dredge_DCV = caret::train(VOLUMEDREDGED ~ .,
-                       data = gage_xgb[in_train, ],
+                       data = gage_xgb_scaled[in_train, ],
                        method = "xgbTree",
-                       tuneGrid = expand.grid(nrounds = c (15,25,50,100), 
-                                              max_depth = 1:10,
-                                        eta =c(0.3), gamma = 0,
-                                        colsample_bytree = 1,
-                                        min_child_weight = 1, subsample = 1),
+                     tune_grid = expand.grid(
+  nrounds = c(25, 50),        # fewer rounds
+  max_depth = c(2, 4),        # shallow trees
+  eta = c(0.3),               # fast learning rate
+  gamma = 0,                  # no regularization for speed
+  colsample_bytree = 0.8,     # reasonable feature sampling
+  min_child_weight = 1,
+  subsample = 0.8
+)
+,
                        verbosity = 0,
                        trControl = ctrl,
                        na.action = na.exclude)
  
   # "Frankenstein" vector of predictions
   cv_pred[in_test] = predict(fit_dredge_DCV,
-                             newdata = gage_xgb[in_test, ])
+                             newdata = gage_xgb_scaled[in_test, ])
+  print(Sys.time())
  
 }
 
 
-##Og
-train<-gage_xgb[in_train, ]
-best_tune<-fit_dredge_DCV$results
-best_tune
-confusion_matrix <- confusionMatrix(cv_pred[in_test], gage_xgb[in_test, ])
-print(confusion_matrix)
 
+# Post-CV model evaluation
+
+# RMSE: This is the most honest assessment of accuracy for regression
 # I'll use RMSE to assess the model, because that's the metric I used to select the model.
 # The model with the best RMSE may or may not be the one with the best MAE.
 # RMSE
-sqrt(mean((cv_pred - gage_xgb$VOLUMEDREDGED)^2)) # This is the most honest
-                                         # assessment of accuracy
+rmse = sqrt(mean((cv_pred - gage_xgb_scaled$VOLUMEDREDGED)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Additional Regression Metrics (MAE, R-squared, etc.)
+mae = mean(abs(cv_pred - gage_xgb_scaled$VOLUMEDREDGED))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# R-squared (R²) can be another good metric to evaluate model performance
+ss_total = sum((gage_xgb_scaled$VOLUMEDREDGED - mean(gage_xgb_scaled$VOLUMEDREDGED))^2)
+ss_residual = sum((gage_xgb_scaled$VOLUMEDREDGED - cv_pred)^2)
+r_squared = 1 - (ss_residual / ss_total)
+cat("R-squared:", r_squared, "\n")
+
+# Best tuning parameters from last fold
+best_tune <- fit_dredge_DCV$results
+cat("Best Hyperparameters from Last Fold:\n")
+print(best_tune)
 ```
 
 ## Well that didnt work! Lets try modeling between the two river systems 
@@ -688,12 +839,17 @@ ggplot(PCAvalues, aes(x = PC1, y = PC2, colour = Dredge_Type)) +
 #Miss
 ```{r}
 Miss_xgb <-Miss_Cleaned |>
-  select(-lead_7, -lead_14,-DATE_START,
+  select(#-lead_7,# -lead_14,
+    -DATE_START,
          -EXECYEAR,-DREDGE_TYPE,
          -DREDGINGPURPOSE, -RIVER)|>
     mutate_if(is.character, factor)
  
-ctrl = trainControl(method = "cv", number = 10) 
+ctrl = trainControl(method = "timeslice",
+                      initialWindow = 60,   # The first 60 data points for training
+                      horizon = 45,         # Forecasting horizon
+                      fixedWindow = TRUE,   # Slide the window forward after each step
+                      verboseIter = TRUE) 
 Miss_xgb_fit = caret::train(VOLUMEDREDGED ~ .,
                  data = Miss_xgb,
                  method = "xgbTree",
@@ -750,20 +906,6 @@ xgb.plot.importance(import_matrix)
 ```{r}
 library(tensorflow)
 library(keras)
-model_7 <- keras_model_sequential() |>
-  layer_lstm(units = 50, return_sequences = TRUE, input_shape = c(7, ncol(gage_xgb) - 1))  |>
-  layer_dropout(rate = 0.2)|>
-  layer_lstm(units = 50, return_sequences = TRUE) |>
-  layer_dropout(rate = 0.2) |>
-  layer_lstm(units = 50) |>
-  layer_dropout(rate = 0.2) |>
-  layer_dense(units = 1)
-
-
-model_7 %>% compile(
-  loss = 'mean_squared_error',
-  optimizer = 'adam'
-)
 
 
 # Function to create sequences based on window size
@@ -790,10 +932,9 @@ window_size_14 <- 14
 library(recipes)
 
 # Assume gage_xgb is your original dataset
-gage_xgb_scaled_recipe <- recipe(~ ., data = gage_xgb) %>%
-  # Define step to scale all numeric predictors
-  step_scale(all_numeric_predictors()) %>%
-  # You can also center them if needed
+gage_xgb_scaled_recipe <- recipe(~ ., data = gage_xgb) |>
+  step_dummy(all_nominal(), one_hot = TRUE) |>
+  step_scale(all_numeric_predictors()) |>
   step_center(all_numeric_predictors())
 
 # Prep the recipe
@@ -805,12 +946,13 @@ gage_xgb_scaled <- bake(gage_xgb_prepped, new_data = gage_xgb)
 # View scaled data
 head(gage_xgb_scaled)
 
-
+gage_xgb_scaled_clean <- gage_xgb_scaled|>
+  select(-lead_7,-lead_14)
 
 
 # Assume `gage_xgb_scaled` is your scaled dataset and the target column is 'VOLUMEDREDGED'
-data_windows_7 <- create_sequences(gage_xgb_scaled, target_column = which(names(gage_xgb) == "VOLUMEDREDGED"), sequence_length = window_size_7)
-data_windows_14 <- create_sequences(gage_xgb_scaled, target_column = which(names(gage_xgb) == "VOLUMEDREDGED"), sequence_length = window_size_14)
+data_windows_7 <- create_sequences(gage_xgb_scaled_clean, target_column = which(names(gage_xgb_scaled_clean) == "VOLUMEDREDGED"), sequence_length = window_size_7)
+data_windows_14 <- create_sequences(gage_xgb_scaled_clean, target_column = which(names(gage_xgb_scaled_clean) == "VOLUMEDREDGED"), sequence_length = window_size_14)
 
 # X_train and y_train for 7-day window
 X_train_7 <- data_windows_7$X
@@ -836,15 +978,46 @@ y_train_14_final <- y_train_14[1:train_size_14]
 X_test_14_final <- X_train_14[(train_size_14+1):length(y_train_14),,]
 y_test_14_final <- y_train_14[(train_size_14+1):length(y_train_14)]
 
+# Build the model
+model_7 <- keras_model_sequential() |>
+  layer_lstm(units = 50, return_sequences = TRUE, input_shape = c(7, ncol(gage_xgb_scaled_clean) - 1))  |>
+  layer_dropout(rate = 0.2)|>
+  layer_lstm(units = 50, return_sequences = TRUE) |>
+  layer_dropout(rate = 0.2) |>
+  layer_lstm(units = 50) |>
+  layer_dropout(rate = 0.2) |>
+  layer_dense(units = 1)
 
-# Train the model for the 7-day window
-history_7 <- model_7 %>% fit(
+
+# model_7 %>% compile(
+#   loss = 'mean_squared_error',
+#   optimizer = 'adam'
+# )
+
+model_7 %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = optimizer_adam(learning_rate = 0.001)  # Try also 0.0005 or 0.0001
+)
+
+callback <- callback_early_stopping(monitor = "val_loss", patience = 10, restore_best_weights = TRUE)
+
+history_7 <- model_7 |> fit(
   X_train_7_final, 
   y_train_7_final,
-  epochs = 20, 
-  batch_size = 32, 
-  validation_data = list(X_test_7_final, y_test_7_final)
+  epochs = 1000,
+  batch_size = 32,
+  validation_data = list(X_test_7_final, y_test_7_final),
+  callbacks = list(callback)
 )
+
+# Train the model for the 7-day window
+# history_7 <- model_7 %>% fit(
+#   X_train_7_final, 
+#   y_train_7_final,
+#   epochs = 1000, 
+#   batch_size = 32, 
+#   validation_data = list(X_test_7_final, y_test_7_final)
+# )
 
 # Evaluate model on 7-day window
 score_7 <- model_7 %>% evaluate(X_test_7_final, y_test_7_final)
@@ -852,5 +1025,458 @@ cat('Test loss for 7-day window:', score_7, "\n")
 
 
 predictions_7 <- model_7 %>% predict(X_test_7_final)
+
+```
+
+### LSTM method2
+```{r}
+library(tensorflow)
+library(keras)
+library(recipes)
+library(dplyr)
+
+# Set window sizes
+window_size_7 <- 7
+window_size_14 <- 14
+
+# --- Step 1: Separate and scale features & target ---
+target_col <- "VOLUMEDREDGED"
+gage_target <- gage_xgb[[target_col]]
+gage_features <- gage_xgb |> select(-all_of(target_col))
+
+# Scale predictors
+gage_recipe <- recipe(~ ., data = gage_features) |>
+  step_dummy(all_nominal(), one_hot = TRUE) |>
+  step_scale(all_numeric_predictors()) |>
+  step_center(all_numeric_predictors())
+gage_recipe_prep <- prep(gage_recipe, training = gage_features)
+gage_features_scaled <- bake(gage_recipe_prep, new_data = gage_features)
+
+# Scale target manually
+target_mean <- mean(gage_target, na.rm = TRUE)
+target_sd <- sd(gage_target, na.rm = TRUE)
+gage_target_scaled <- (gage_target - target_mean) / target_sd
+
+# Recombine scaled features and target
+gage_scaled_clean <- bind_cols(gage_features_scaled, VOLUMEDREDGED = gage_target_scaled)
+
+# Optionally remove future-looking targets
+gage_scaled_clean <- gage_scaled_clean |> select(-lead_7, -lead_14)
+
+# --- Step 2: Sequence creation function ---
+create_sequences <- function(data, target_column, sequence_length) {
+  X <- list()
+  y <- list()
+  
+  for (i in (sequence_length + 1):nrow(data)) {
+    X[[i - sequence_length]] <- as.matrix(data[(i - sequence_length):(i - 1), -target_column])
+    y[[i - sequence_length]] <- data[i, target_column]
+  }
+  
+  X <- array(unlist(X), dim = c(length(X), sequence_length, ncol(data) - 1))
+  y <- unlist(y)
+  
+  return(list(X = X, y = y))
+}
+
+# --- Step 3: Create sequences ---
+target_index <- which(names(gage_scaled_clean) == "VOLUMEDREDGED")
+data_windows_7 <- create_sequences(gage_scaled_clean, target_column = target_index, sequence_length = window_size_7)
+
+X <- data_windows_7$X
+y <- data_windows_7$y
+
+# Split into train/test
+train_size <- floor(0.8 * length(y))
+X_train <- X[1:train_size,,]
+y_train <- y[1:train_size]
+X_test <- X[(train_size+1):length(y),,]
+y_test <- y[(train_size+1):length(y)]
+
+# --- Step 4: Build model ---
+model <- keras_model_sequential() |>
+  layer_lstm(units = 50, return_sequences = TRUE, input_shape = c(window_size_7, ncol(gage_scaled_clean) - 1)) |>
+  layer_dropout(rate = 0.2) |>
+  layer_lstm(units = 50, return_sequences = TRUE) |>
+  layer_dropout(rate = 0.2) |>
+  layer_lstm(units = 50) |>
+  layer_dropout(rate = 0.2) |>
+  layer_dense(units = 1)
+
+model %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = optimizer_adam(learning_rate = 0.001)
+)
+
+callback <- callback_early_stopping(monitor = "val_loss", patience = 10, restore_best_weights = TRUE)
+
+history <- model %>% fit(
+  X_train, y_train,
+  epochs = 1000,
+  batch_size = 32,
+  validation_data = list(X_test, y_test),
+  callbacks = list(callback)
+)
+
+# --- Step 5: Predict and invert scaling ---
+pred_scaled <- model %>% predict(X_test)
+pred <- pred_scaled * target_sd + target_mean
+actual <- y_test * target_sd + target_mean
+
+# --- Step 6: Evaluate on original scale ---
+rmse <- sqrt(mean((actual - pred)^2))
+r_squared <- 1 - sum((actual - pred)^2) / sum((actual - mean(actual))^2)
+mae <- mean(abs(actual - pred))
+
+cat("RMSE:", rmse, "\n")
+cat("R-squared:", r_squared, "\n")
+cat("MAE:", mae, "\n")
+```
+
+##Lets try predicting a binary yes/no for dredging
+```{r}
+library(tensorflow)
+library(keras)
+library(recipes)
+library(dplyr)
+
+# --- Step 1: Parameters ---
+window_size <- 7
+forecast_horizon <- 7  # Predict if dredging will occur in the next 7 days
+target_col <- "VOLUMEDREDGED"
+
+# --- Step 2: Feature/target separation and scaling ---
+gage_target <- gage_xgb[[target_col]]
+gage_features <- gage_xgb |> select(-all_of(target_col))
+
+# Use recipes to scale and encode predictors
+gage_recipe <- recipe(~ ., data = gage_features) |>
+  step_dummy(all_nominal(), one_hot = TRUE) |>
+  step_scale(all_numeric_predictors()) |>
+  step_center(all_numeric_predictors())
+
+gage_recipe_prep <- prep(gage_recipe, training = gage_features)
+gage_features_scaled <- bake(gage_recipe_prep, new_data = gage_features)
+
+# Keep target as-is (not scaled), used for binary labeling
+gage_scaled_clean <- bind_cols(gage_features_scaled, VOLUMEDREDGED = gage_target)
+
+# Optional: remove future-looking columns
+gage_scaled_clean <- gage_scaled_clean |> select(-lead_7, -lead_14)
+
+# --- Step 3: Sequence creation for classification ---
+create_binary_sequences <- function(data, target_column, sequence_length, forecast_horizon) {
+  X <- list()
+  y <- list()
+  
+  for (i in (sequence_length + 1):(nrow(data) - forecast_horizon)) {
+    X[[i - sequence_length]] <- as.matrix(data[(i - sequence_length):(i - 1), -target_column])
+    
+    future_window <- data[i:(i + forecast_horizon - 1), target_column]
+    dredging_needed <- as.integer(any(future_window > 0))
+    
+    y[[i - sequence_length]] <- dredging_needed
+  }
+  
+  X <- array(unlist(X), dim = c(length(X), sequence_length, ncol(data) - 1))
+  y <- unlist(y)
+  
+  return(list(X = X, y = y))
+}
+
+# --- Step 4: Generate data ---
+target_index <- which(names(gage_scaled_clean) == "VOLUMEDREDGED")
+data_windows <- create_binary_sequences(
+  gage_scaled_clean,
+  target_column = target_index,
+  sequence_length = window_size,
+  forecast_horizon = forecast_horizon
+)
+
+X <- data_windows$X
+y <- data_windows$y
+
+# --- Step 5: Train/test split ---
+train_size <- floor(0.8 * length(y))
+X_train <- X[1:train_size,,]
+y_train <- y[1:train_size]
+X_test <- X[(train_size + 1):length(y),,]
+y_test <- y[(train_size + 1):length(y)]
+
+# --- Step 6: LSTM model ---
+model <- keras_model_sequential() |>
+  layer_lstm(units = 50, return_sequences = TRUE, input_shape = c(window_size, dim(X)[3])) |>
+  layer_dropout(rate = 0.2) |>
+  layer_lstm(units = 50, return_sequences = TRUE) |>
+  layer_dropout(rate = 0.2) |>
+  layer_lstm(units = 50) |>
+  layer_dropout(rate = 0.2) |>
+  layer_dense(units = 1, activation = "sigmoid")  # Binary output
+
+model %>% compile(
+  loss = 'binary_crossentropy',
+  optimizer = optimizer_adam(learning_rate = 0.001),
+  metrics = c('accuracy', metric_auc())
+)
+
+# --- Step 7: Train model ---
+callback <- callback_early_stopping(monitor = "val_loss", patience = 10, restore_best_weights = TRUE)
+
+history <- model %>% fit(
+  X_train, y_train,
+  epochs = 100,
+  batch_size = 32,
+  validation_data = list(X_test, y_test),
+  callbacks = list(callback)
+)
+
+# --- Step 8: Evaluate and predict ---
+pred_probs <- model %>% predict(X_test)
+pred_classes <- ifelse(pred_probs > 0.5, 1, 0)
+
+# Confusion matrix
+confusion_matrix <- table(Predicted = pred_classes, Actual = y_test)
+print(confusion_matrix)
+
+# Metrics
+accuracy <- mean(pred_classes == y_test)
+TP <- sum(pred_classes == 1 & y_test == 1)
+FP <- sum(pred_classes == 1 & y_test == 0)
+FN <- sum(pred_classes == 0 & y_test == 1)
+
+precision <- ifelse((TP + FP) > 0, TP / (TP + FP), 0)
+recall <- ifelse((TP + FN) > 0, TP / (TP + FN), 0)
+f1 <- ifelse((precision + recall) > 0, 2 * precision * recall / (precision + recall), 0)
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision)
+
+
+```
+
+
+
+
+```{r}
+library(tensorflow)
+library(keras)
+library(recipes)
+library(dplyr)
+
+prepare_lstm_data <- function(data) {
+  # Select relevant features
+  relevant_features <- c(
+    "VOLUMEDREDGED", "UP_RIV_MIL", "DN_RIV_MIL", "POOL", "DATE_START",
+    names(select(data, matches("MI\\d+")))
+  )
+  
+  data_subset <- data %>%
+    select(all_of(relevant_features)) %>%
+    arrange(DATE_START)
+  
+  # Convert POOL to factor and then numeric
+  data_subset$POOL <- as.numeric(factor(data_subset$POOL))
+  
+  # Create binary target
+  data_subset$dredge_needed <- as.integer(data_subset$VOLUMEDREDGED > 0)
+  
+  # Remove DATE_START after arranging
+  data_subset <- data_subset %>%
+    select(-DATE_START)
+  
+  # Scale numeric features
+  recipe_obj <- recipe(~ ., data = data_subset) %>%
+    step_normalize(all_numeric_predictors())
+  
+  prepped_recipe <- prep(recipe_obj)
+  scaled_data <- bake(prepped_recipe, new_data = data_subset)
+  
+  return(scaled_data)
+}
+
+# 2. Modified sequence creation
+create_sequences <- function(data, window_size = 45) {
+  # Ensure all columns are numeric
+  numeric_data <- data %>%
+    mutate(across(everything(), as.numeric))
+  
+  X <- list()
+  y <- list()
+  
+  for(i in 1:(nrow(numeric_data) - window_size)) {
+    # Exclude dredge_needed column from features
+    X[[i]] <- as.matrix(numeric_data[i:(i + window_size - 1), 
+                                   !names(numeric_data) %in% c("dredge_needed")])
+    y[[i]] <- numeric_data$dredge_needed[i + window_size]
+  }
+  
+  X <- array(unlist(X), 
+            dim = c(length(X), 
+                   window_size, 
+                   ncol(numeric_data) - 1))  # -1 for dredge_needed column
+  y <- unlist(y)
+  
+  return(list(X = X, y = y))
+}
+
+# 3. Main execution
+# Prepare data
+scaled_data <- prepare_lstm_data(Miss_Cleaned)
+
+# Create sequences
+sequences <- create_sequences(scaled_data)
+
+# Split data
+split_idx <- floor(0.8 * length(sequences$y))
+X_train <- sequences$X[1:split_idx,,]
+y_train <- sequences$y[1:split_idx]
+X_val <- sequences$X[(split_idx+1):length(sequences$y),,]
+y_val <- sequences$y[(split_idx+1):length(sequences$y)]
+
+# Verify data types
+print("Training data dimensions:")
+print(dim(X_train))
+print("Training labels length:")
+print(length(y_train))
+print("First few values of X_train:")
+print(head(X_train[1,,]))
+print("First few values of y_train:")
+print(head(y_train))
+
+# Train model
+model_results <- train_lstm_model(X_train, y_train, X_val, y_val)
+
+# Evaluate model
+predictions <- predict(model_results$model, X_val)
+binary_predictions <- ifelse(predictions > 0.5, 1, 0)
+
+# Calculate metrics
+confusion_matrix <- table(Actual = y_val, Predicted = binary_predictions)
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+recall <- confusion_matrix[2,2] / sum(confusion_matrix[2,])
+
+print("Confusion Matrix:")
+print(confusion_matrix)
+print(paste("Accuracy:", round(accuracy, 3)))
+print(paste("Recall:", round(recall, 3)))
+
+
+# First, let's check the distribution of actual values
+print("Distribution of actual values (y_val):")
+print(table(y_val))
+
+# Check the raw predictions before binary conversion
+print("Summary of raw predictions:")
+print(summary(predictions))
+
+# Modified evaluation code with error handling
+evaluate_binary_predictions <- function(y_true, y_pred) {
+  # Convert predictions to binary
+  binary_pred <- ifelse(y_pred > 0.5, 1, 0)
+  
+  # Create confusion matrix
+  conf_matrix <- table(Actual = y_true, Predicted = binary_pred)
+  print("Confusion Matrix:")
+  print(conf_matrix)
+  
+  # Calculate metrics with error handling
+  accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+  
+  # Handle case where there are no positive predictions
+  if(length(conf_matrix) == 1 || !any(binary_pred == 1)) {
+    recall <- 0
+    precision <- 0
+    f1 <- 0
+  } else {
+    TP <- conf_matrix["1", "1"]
+    FN <- conf_matrix["1", "0"]
+    FP <- conf_matrix["0", "1"]
+    
+    recall <- ifelse(TP + FN > 0, TP / (TP + FN), 0)
+    precision <- ifelse(TP + FP > 0, TP / (TP + FP), 0)
+    f1 <- ifelse(precision + recall > 0, 
+                 2 * (precision * recall) / (precision + recall), 
+                 0)
+  }
+  
+  return(list(
+    confusion_matrix = conf_matrix,
+    accuracy = accuracy,
+    recall = recall,
+    precision = precision,
+    f1 = f1
+  ))
+}
+
+# Modify the model to address class imbalance
+train_lstm_model <- function(X_train, y_train, X_val, y_val) {
+  # Calculate class weights
+  n_neg <- sum(y_train == 0)
+  n_pos <- sum(y_train == 1)
+  total <- n_neg + n_pos
+  
+  class_weight <- list(
+    "0" = 1,
+    "1" = n_neg/n_pos  # Give more weight to minority class
+  )
+  
+  model <- keras_model_sequential() %>%
+    layer_lstm(units = 64, return_sequences = TRUE, 
+              input_shape = c(dim(X_train)[2], dim(X_train)[3])) %>%
+    layer_dropout(0.2) %>%
+    layer_lstm(units = 32) %>%
+    layer_dropout(0.2) %>%
+    layer_dense(units = 16, activation = "relu") %>%
+    layer_dense(units = 1, activation = "sigmoid")
+  
+  model %>% compile(
+    loss = "binary_crossentropy",
+    optimizer = optimizer_adam(learning_rate = 0.001),
+    metrics = c("accuracy", "AUC")
+  )
+  
+  history <- model %>% fit(
+    X_train, y_train,
+    epochs = 50,
+    batch_size = 32,
+    validation_data = list(X_val, y_val),
+    class_weight = class_weight,  # Add class weights
+    callbacks = list(
+      callback_early_stopping(
+        monitor = "val_loss",
+        patience = 10,
+        restore_best_weights = TRUE
+      )
+    )
+  )
+  
+  return(list(model = model, history = history))
+}
+
+# Retrain model with class weights
+model_results <- train_lstm_model(X_train, y_train, X_val, y_val)
+
+# Make predictions
+predictions <- predict(model_results$model, X_val)
+
+# Evaluate with new function
+results <- evaluate_binary_predictions(y_val, predictions)
+
+# Print detailed results
+print("Evaluation Results:")
+print(paste("Accuracy:", round(results$accuracy, 3)))
+print(paste("Recall:", round(results$recall, 3)))
+print(paste("Precision:", round(results$precision, 3)))
+print(paste("F1 Score:", round(results$f1, 3)))
+
+# Plot training history
+plot(model_results$history)
+
+# Additional analysis of predictions
+hist(predictions, 
+     main = "Distribution of Predictions",
+     xlab = "Predicted Probability",
+     breaks = 20)
+
 ```
 
