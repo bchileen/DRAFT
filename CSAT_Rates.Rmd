@@ -1,0 +1,324 @@
+---
+title: "CSAT_Wrangling_ShoalingRates"
+output: html_document
+date: "2025-05-12"
+---
+
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(ggplot2)
+library(lubridate)
+library(tidyverse)
+library(zoo)
+```
+
+```{r}
+# Set folder path
+folder_path <- "C:/workspace/CSAT/CSAT_distribution/output/CEMVR/19990101__to__20241231"
+
+reach_data<-read_csv("C:/workspace/DRAFT/ReachData.csv")
+
+
+```
+
+```{r, message=FALSE}
+### Shoaling Rates
+
+files <-list.files(path = folder_path,
+                                 pattern = "_SurveyPairVolumeDifference\\.csv$",
+                                 full.names = TRUE)
+
+read_and_label2 <- function(file_path) {
+  # Extract filename
+  file_name <- basename(file_path)
+  
+  # Remove extension
+  file_name_no_ext <- tools::file_path_sans_ext(file_name)
+  
+  # Split by underscore
+  parts <- str_split(file_name_no_ext, "_", simplify = TRUE)
+  
+  # Extract relevant parts
+  river <- parts[1]
+  pool <- parts[2]
+  reach <- parts[4]  # MVR is at [3], 14 or 22 is at [4]
+  
+  # Read the data
+  data <- read_csv(file_path, show_col_types = FALSE)
+  
+  # Add new columns
+  data <- data %>%
+    mutate(
+      river = river,
+      pool = pool,
+      reach = reach,
+      source_file = file_name
+    )
+  
+  return(data)
+}
+
+# Apply the function to all files and bind into one big dataframe
+combined_data <- map_dfr(files, read_and_label2)
+```
+
+```{r}
+# Check it out
+glimpse(combined_data)
+
+combined_data_clean<-combined_data|>
+  mutate(Before_date = ymd(SurveyDateBefore),
+         After_date = ymd(SurveyDateAfter))|>
+  mutate(DateDiff = as.numeric(After_date - Before_date))|>
+  mutate(DailyShoalingRate_ftperday = AnnualShoalingRate_ftperyr/DateDiff,
+         DailyShoalingVolume_Cyperday = AnnualShoalingVolume_CYperyr/DateDiff,
+         VolChange_Cyperday = NetVolumeChange_CY/DateDiff)
+#  filter(DailyShoalingVolume_Cyperday < 12500000 & DailyShoalingRate_ftperday < 900)
+```
+
+###Plot Rates by day
+```{r}
+ggplot(combined_data_clean, aes(x = After_date, y = AnnualShoalingVolume_CYperyr, colour = river)) +
+  geom_point() + 
+  geom_line()+
+#  ylim(-2000000,1000000)+
+  facet_wrap(~ river)
+
+ggplot(combined_data_clean, aes(x = After_date, y = AnnualShoalingRate_ftperyr, colour = river)) +
+  geom_point() + 
+  geom_line()+
+#  ylim(NA, 275)+
+  facet_wrap(~ river)
+
+ggplot(combined_data_clean, aes(x = After_date, y = NetVolumeChange_CY, colour = river)) +
+  geom_point() + 
+  geom_line()+
+#  ylim(NA, 275)+
+  facet_wrap(~ river)
+
+ggplot(combined_data_clean, aes(x = Before_date, y = NetVolumeChange_CY)) +
+  geom_point() +
+  theme(legend.position = "bottom")+
+  geom_line(alpha = 0.5) +
+  labs(title = "Net Volume Change in Sediment (CY) Over Time",
+       x = "Date of Survey After",
+       y = "Net Volume Change (CY)",
+       color = "River") +
+  theme_minimal() +
+    facet_wrap(~ pool, scales = "free_y")
+
+
+```
+Let's only look at rate differences calculated within a year 
+```{r}
+combined_data_year <- combined_data_clean|>
+  mutate(yr_diff = abs(year(After_date) - year(Before_date)))|>
+  filter(yr_diff <1)|>
+  filter(pool != "AL")|>
+  filter(pool != "CS")
+```
+
+```{r}
+ggplot(combined_data_year, aes(x = After_date, y = AnnualShoalingVolume_CYperyr, colour = river)) +
+  geom_point() + 
+  geom_line()+
+#  ylim(NA,2000000)+
+  facet_wrap(~ river)
+
+ggplot(combined_data_year, aes(x = After_date, y = AnnualShoalingRate_ftperyr, colour = river)) +
+  geom_point() + 
+  geom_line()+
+#  ylim(NA, 275)+
+  facet_wrap(~ river)
+
+ggplot(combined_data_year, aes(x = After_date, y = NetVolumeChange_CY, colour = river)) +
+  geom_point() + 
+  geom_line()+
+#  ylim(NA, 275)+
+  facet_wrap(~ river)
+
+ggplot(combined_data_year, aes(x = Before_date, y = NetVolumeChange_CY, color = river)) +
+  geom_point() +
+  theme(legend.position = "bottom")+
+  geom_line(alpha = 0.5) +
+  labs(title = "Net Volume Change in Sediment (CY) Over Time By Pool",
+       x = "Survey Date",
+       y = "Net Volume Change (CY)",
+       color = "River") +
+  theme_minimal() +
+    facet_wrap(~ pool, scales = "free_y")
+```
+
+
+### different view
+```{r}
+daily_expanded <- combined_data_clean |>
+  # Create a sequence of dates for each row
+  rowwise() |>
+  mutate(DateSeq = list(seq(Before_date, After_date, by = "day"))) |>
+  ungroup() |>
+  # Expand to one row per day
+  unnest(cols = c(DateSeq)) |>
+  rename(Date = DateSeq) |>
+  # Keep only the relevant daily rate values
+  select(Date, DailyShoalingVolume_Cyperday,DailyShoalingRate_ftperday, river, pool, reach)
+  
+write_csv(daily_expanded, "C:/workspace/DRAFT/CSAT_Data/SurveyPairVolumeDifference_PreRollingAvg.csv")
+
+  glimpse(daily_expanded)
+
+# daily_series <- daily_expanded |>
+#   group_by(Date, river, pool, reach) |>
+#   summarise(DailyVolume = sum(DailyShoalingVolume_Cyperday, na.rm = TRUE), 
+#             DailyRate = sum(DailyShoalingRate_ftperday, na.rm = TRUE),
+#             .groups = "drop") |>
+#   filter(pool == "LA")|>
+#   arrange(river, pool, reach, Date) |>
+#   group_by(river, pool, reach) |>
+#   summarise(mutate(RollingAvgVol_7d = rollmean(DailyVolume, k = 7, fill = NA, align = "right"),
+#          RollingAvgRate_7d = rollmean(DailyRate, k = 7, fill = NA, align = "right")))  |>
+#   ungroup()
+
+
+daily_avg <- daily_expanded %>%
+  group_by(Date, river, pool, reach) %>%
+  summarise(
+    avg_volume = mean(DailyShoalingVolume_Cyperday, na.rm = TRUE),
+    count_volume = sum(!is.na(DailyShoalingVolume_Cyperday)),
+     sd_volume = sd(DailyShoalingVolume_Cyperday, na.rm = TRUE),
+    se_volume = sd_volume/sqrt(n()),
+    avg_rate = mean(DailyShoalingRate_ftperday, na.rm = TRUE),
+    count_rate = sum(!is.na(DailyShoalingRate_ftperday)),
+    sd_rate = sd(DailyShoalingRate_Cyperday, na.rm = TRUE),
+    se_rate = sd_rate/sqrt(n()),
+    .groups = "drop"
+  )|>
+  mutate(site = paste(river, pool, reach, sep = "_"))
+
+daily_avg_rolled <- daily_avg %>%
+  arrange(site, Date) %>%
+  group_by(site) %>%
+  mutate(
+    avg_volume_7day = rollmean(avg_volume, k = 7, fill = NA, align = "right"),
+     avg_volume_7day_upper = avg_volume_7day + 1.96 * rollmean(se_volume, k = 7, fill = NA),
+    avg_volume_7day_lower = avg_volume_7day - 1.96 * rollmean(se_volume, k = 7, fill = NA),
+    avg_rate_7day = rollmean(avg_rate, k = 7, fill = NA, align = "right"),
+  ) %>%
+  ungroup()
+
+write_csv(daily_avg_rolled, "C:/workspace/DRAFT/CSAT_Data/SurveyPairVolumeDifference.csv")
+
+# Loop through each unique value in the `pool` column
+for (pool_value in unique(daily_avg_rolled$pool)) {
+  
+# Create a new dataframe for each pool value, named dynamically
+  assign(paste0("P_", pool_value), daily_avg_rolled %>% filter(pool == pool_value))
+}
+
+
+
+year_plots<-year_plots |>
+  mutate(Date_norm = as.Date("2000-01-01") + as.numeric(Date - lubridate::floor_date(Date, "year")))
+
+year_plots |>
+  ggplot(aes(Date_norm, avg_rate_7day, color = factor(year))) +
+  geom_line() +
+  scale_x_date(date_labels = "%b")+
+  facet_wrap(~reach,scales = "free_y")+
+  ggtitle("Pool 18 avg 7 day volumes across each reach")
+
+
+daily_avg_rolled|>
+  filter(river == "IL")|>
+  ggplot(aes(x = Date, y = avg_volume_7day, colour = river)) +
+  geom_point() + 
+  ylim(NA,125000)+
+  geom_line()
+
+daily_avg_rolled|>
+  filter(river == "UM")|>
+  ggplot(aes(x = Date, y = avg_volume_7day, colour = river)) +
+  geom_point() + 
+  ylim(NA,125000)+
+  geom_line()
+
+
+daily_avg_rolled |>
+  filter(river == "IL")|>
+  ggplot(aes(x = Date, y = count_rate)) +
+  geom_col(fill = "dodgerblue", alpha = 0.60)+
+  facet_wrap(~pool)
+
+daily_avg_rolled |>
+  filter(river == "UM")|>
+  ggplot(aes(x = Date, y = count_rate)) +
+  geom_col(fill = "dodgerblue", alpha = 0.60)+
+  facet_wrap(~pool)
+
+#, scales = "free_y"
+  
+
+# Then: pivot to wide format
+daily_volume_wide <- daily_avg %>%
+  select(Date, site, avg_volume) %>%
+  pivot_wider(
+    names_from = site,
+    values_from = avg_volume
+  )|>
+  mutate(year = year(Date))
+
+daily_rate_wide <- daily_avg %>%
+  select(Date, site, avg_rate) %>%
+  pivot_wider(
+    names_from = site,
+    values_from = avg_rate
+  )
+
+
+daily_expanded |>
+  filter(pool == "20")|>
+  filter(year(Date) >= 2015 & year(Date) <= 2020)|>
+  ggplot(aes(x = Date, y = DailyShoalingVolume_Cyperday, colour = river)) +
+  geom_point() + 
+  geom_line()+
+  facet_wrap(~reach)
+
+
+
+```
+
+```{r}
+# For the yearly comparison plot
+year_plots |>
+  ggplot(aes(Date_norm, avg_rate_7day, color = factor(year))) +
+  geom_line() +
+  scale_x_date(date_labels = "%b") +
+  geom_ribbon(aes(ymin = avg_rate_7day_lower, ymax = avg_rate_7day_upper, fill = factor(year)), alpha = 0.2) +
+  facet_wrap(~reach, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title = "Pool 18 Average 7-day Volumes Across Each Reach",
+    x = "Month",
+    y = "7-day Average Rate",
+    color = "Year"
+  )
+
+# For the river-specific plots
+daily_avg_rolled |>
+  filter(river == "IL") |>
+  ggplot(aes(x = Date, y = avg_volume_7day)) +
+  geom_line(color = "blue") +
+   geom_ribbon(aes(ymin = avg_volume_7day_lower, ymax = avg_volume_7day_upper), 
+              fill = "blue", alpha = 0.2) +
+  ylim(NA, 125000) +
+  theme_minimal() +
+  labs(
+    title = "Illinois River 7-day Average Volumes",
+    x = "Date",
+    y = "Volume (CY)"
+  )
+```
+
