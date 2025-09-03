@@ -514,10 +514,11 @@ xgb.plot.importance(import_matrix)
 ###Cross Validation of Model
 ```{r}
 library(progress)
+n_outer_folds = 5
 pb <- progress_bar$new(total = n_outer_folds)
 set.seed(123)
 n = nrow(gage_xgb_scaled)
-n_outer_folds = 5
+
 
 cv_pred = vector(length = n)
 
@@ -946,8 +947,7 @@ gage_xgb_scaled <- bake(gage_xgb_prepped, new_data = gage_xgb)
 # View scaled data
 head(gage_xgb_scaled)
 
-gage_xgb_scaled_clean <- gage_xgb_scaled|>
-  select(-lead_7,-lead_14)
+gage_xgb_scaled_clean <- gage_xgb_scaled
 
 
 # Assume `gage_xgb_scaled` is your scaled dataset and the target column is 'VOLUMEDREDGED'
@@ -1061,7 +1061,7 @@ gage_target_scaled <- (gage_target - target_mean) / target_sd
 gage_scaled_clean <- bind_cols(gage_features_scaled, VOLUMEDREDGED = gage_target_scaled)
 
 # Optionally remove future-looking targets
-gage_scaled_clean <- gage_scaled_clean |> select(-lead_7, -lead_14)
+gage_scaled_clean <- gage_scaled_clean 
 
 # --- Step 2: Sequence creation function ---
 create_sequences <- function(data, target_column, sequence_length) {
@@ -1162,7 +1162,7 @@ gage_features_scaled <- bake(gage_recipe_prep, new_data = gage_features)
 gage_scaled_clean <- bind_cols(gage_features_scaled, VOLUMEDREDGED = gage_target)
 
 # Optional: remove future-looking columns
-gage_scaled_clean <- gage_scaled_clean |> select(-lead_7, -lead_14)
+gage_scaled_clean <- gage_scaled_clean 
 
 # --- Step 3: Sequence creation for classification ---
 create_binary_sequences <- function(data, target_column, sequence_length, forecast_horizon) {

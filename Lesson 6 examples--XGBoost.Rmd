@@ -1,0 +1,331 @@
+---
+title: "XGBoost"
+author: "Abra Brisbin"
+date: "11/1/2020"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(ggformula)
+
+library(ISLR) # for College data, used in hwk 4
+
+library(caret)
+
+library(xgboost)
+library(DiagrammeR)
+
+```
+
+
+## Predicting Enrollment
+
+```{r}
+
+head(College)
+
+```
+
+
+```{r}
+
+set.seed(123)
+ctrl = trainControl(method = "cv", number = 5) # Increase this to 10 to get more consistent RMSEs
+fit_coll = train(Enroll ~ ., 
+             data = College,
+             method = "xgbTree",
+             tuneGrid = expand.grid(nrounds = 100, max_depth = 1:3, 
+                                    eta = 0.3, gamma = 0, 
+                                    colsample_bytree = .8, 
+                                    min_child_weight = 1, subsample = 1),
+             verbosity = 0, 
+             trControl = ctrl)
+
+fit_coll
+
+```
+
+### Variable importance
+
+```{r}
+
+varImp(fit_coll)
+
+```
+
+```{r}
+
+import_matrix = xgb.importance(model = fit_coll$finalModel)
+import_matrix
+xgb.plot.importance(import_matrix)
+
+```
+## Double CV
+
+```{r}
+
+set.seed(123)
+n = nrow(College)
+n_outer_folds = 10
+
+cv_pred = vector(length = n)
+
+groups = rep(1:n_outer_folds, length = n)
+cv_groups = sample(groups, n)
+
+
+for(ii in 1:n_outer_folds){
+  in_test = (cv_groups == ii)
+  in_train = (cv_groups != ii)
+  
+  
+  ctrl = trainControl(method = "cv", number = 5)
+  fit_coll_DCV = train(Enroll ~ ., 
+                       data = College[in_train, ],
+                       method = "xgbTree",
+                       tuneGrid = expand.grid(nrounds = 100, max_depth = 1:3, 
+                                              eta = 0.3, gamma = 0, 
+                                              colsample_bytree = .8, 
+                                              min_child_weight = 1, subsample = 1),
+                       verbosity = 0, 
+                       trControl = ctrl)
+
+  
+  # "Frankenstein" vector of predictions
+  cv_pred[in_test] = predict(fit_coll_DCV, 
+                             newdata = College[in_test, ])
+  
+}
+
+# I'll use RMSE to assess the model, because that's the metric I used to select the model.
+# The model with the best RMSE may or may not be the one with the best MAE.
+# RMSE
+sqrt(mean((cv_pred - College$Enroll)^2)) # This is the most honest 
+                                         # assessment of accuracy
+
+```
+
+## Viewing Trees
+
+Let's make a model with 2 trees, because that will be easier to view and make predictions about.
+```{r}
+
+set.seed(123)
+ctrl = trainControl(method = "cv", number = 5)
+fit_simple2 = train(Enroll ~ ., 
+             data = College,
+             method = "xgbTree",
+             tuneGrid = expand.grid(nrounds = 2, max_depth = 1:2, 
+                                    eta = 0.3, gamma = 0, 
+                                    colsample_bytree = .8, 
+                                    min_child_weight = 1, 
+                                    subsample = 1),
+             verbosity = 0, 
+             trControl = ctrl)
+
+```
+
+```{r}
+
+xgb.plot.tree(model = fit_simple2$finalModel, trees = 0)
+xgb.plot.tree(model = fit_simple2$finalModel, trees = 1)
+```
+
+
+## Relating predictions to the trees
+```{r}
+# For a regression tree, the predictions are simply the sum of the Values in their leaves, + .5.
+
+predictions2 = predict(fit_simple2)
+
+head(predictions2)
+College %>%
+  dplyr::select(F.Undergrad, Accept) %>%
+  head()
+```
+Abilene Christian University:  Tree 0 value = 100.426697
+Tree 1 value = 202.066833
+```{r}
+100.426697 + 202.066833 +.5 # Matches the predicted value from predict()
+```
+### Classification trees
+
+```{r}
+set.seed(123)
+ctrl = trainControl(method = "cv", number = 5)
+private_simple2 = train(Private ~ ., 
+             data = College,
+             method = "xgbTree",
+             tuneGrid = expand.grid(nrounds = 2, max_depth = 1:2, eta = 0.3, gamma = 0, colsample_bytree = .8, min_child_weight = 1, subsample = 1),
+             trControl = ctrl)
+
+private_simple2
+```
+
+```{r}
+xgb.plot.tree(model = private_simple2$finalModel, trees = 0)
+```
+
+```{r}
+xgb.plot.tree(model = private_simple2$finalModel, trees = 1)
+```
+
+```{r}
+predictions_priv = predict(private_simple2, type = "prob")
+head(predictions_priv)
+College %>%
+  dplyr::select(Outstate, Accept, Enroll, F.Undergrad, Room.Board) %>%
+  head()
+```
+Abilene Christian University:  Tree 0: -0.156000003
+Tree 1:  -0.412369579
+```{r}
+# For classification, the sum of the Values in the relevant leaves
+# gives the log odds of Y = 1
+a = 0 + exp(-0.156000003-0.412369579)
+1/(1+a) # Prob(Private), matches the value from predict()
+```
+
+Y = 1 is "Yes", Private.
+```{r}
+contrasts(College$Private)
+```
+
+
+
+
+##################################
+
+
+### 1 Tree
+```{r}
+
+set.seed(123)
+ctrl = trainControl(method = "cv", number = 5)
+fit_simple = train(Enroll ~ ., 
+             data = College,
+             method = "xgbTree",
+             tuneGrid = expand.grid(nrounds = 1, max_depth = 1, 
+                                    eta = 0.3, gamma = 0, 
+                                    colsample_bytree = .8, 
+                                    min_child_weight = 1, 
+                                    subsample = 1),
+             verbosity = 0, # suppresses a warning about 
+                            # deprecated version of the 
+                            # objective function
+                            # (not necessary for classification)
+             trControl = ctrl)
+
+fit_simple
+
+```
+
+
+
+### 100 Trees
+
+
+```{r}
+
+#xgb.plot.tree(model = fit_coll$finalModel) # would show all trees
+xgb.plot.tree(model = fit_coll$finalModel, trees = 0)
+```
+
+### Regression tree predictions
+```{r}
+xgb.plot.tree(model = fit_simple$finalModel)
+```
+```{r}
+# baseline = 0.5, so each prediction is 0.5 + the Value of its leaf.
+# darker arrows are the "yes" direction.
+predictions = predict(fit_simple)
+head(predictions)
+head(College$Accept)
+```
+
+
+```{r}
+
+xgb.plot.tree(model = fit_simple2$finalModel, trees = 0)
+
+```
+
+```{r}
+xgb.plot.tree(model = fit_simple2$finalModel, trees = 1)
+```
+
+```{r}
+# For a regression tree, the predictions are simply the sum of the Values in their leaves, + .5.
+
+predictions2 = predict(fit_simple2)
+
+head(predictions2)
+College %>%
+  select(F.Undergrad, Apps) %>%
+  head()
+```
+Abilene Christian University:  Tree 0 value = 221.183502
+Tree 1 value = 101.9478
+```{r}
+221.183502 + 101.9478 +.5 # Matches the predicted value from predict()
+```
+
+
+
+### Display the depth of the trees
+```{r}
+xgb.plot.deepness(model = fit_coll$finalModel)
+```
+
+
+
+# Classification
+
+
+
+
+## 1 tree
+```{r}
+set.seed(123)
+ctrl = trainControl(method = "cv", number = 5)
+private_simple = train(Private ~ ., 
+             data = College,
+             method = "xgbTree",
+             tuneGrid = expand.grid(nrounds = 1, max_depth = 1:2, eta = 0.3, gamma = 0, colsample_bytree = .8, min_child_weight = 1, subsample = 1),
+             trControl = ctrl)
+
+private_simple
+```
+
+```{r}
+xgb.plot.tree(model = private_simple$finalModel)
+```
+
+```{r}
+ # newdata argument is optional here, but seems necessary on the homework.
+
+predictions_priv = predict(private_simple, 
+                           newdata = College, 
+                           type = "prob")
+
+head(predictions_priv)
+College %>%
+  select(Outstate, Accept, Enroll) %>%
+  head()
+```
+
+Abilene Christian University:  Value = -0.156000003
+```{r}
+
+a= 0 + exp(-0.156000003) # 0 is the log odds from the baseline (.5)
+1/(1+a)
+```
+
+## Classification with 2 trees

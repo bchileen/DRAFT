@@ -17,12 +17,33 @@ library(zoo)
 
 ```{r}
 # Set folder path
-folder_path <- "C:/workspace/CSAT/CSAT_distribution/output/CEMVR/19990101__to__20241231"
+folder_path <- "C:/workspace/CSAT/CSAT_distribution/output/CEMVR/19990101_to_20241231_Aug"
 
 reach_data<-read_csv("C:/workspace/DRAFT/ReachData.csv")
 
 
 ```
+
+```{r}
+surveyUpdate_table<-read_delim("SurveyUpdate.txt")
+dredge_data <-  read.csv("Dredge_Event_data.csv")
+
+dredge_data<- dredge_data |>
+  filter(!is.na(POSTHYDROSURVEY_ID))|>
+  filter(POSTHYDROSURVEY_ID != "")
+
+
+dredge_survey_joined <- left_join(surveyUpdate_table, dredge_data, 
+                                  by = join_by(SurveyID == POSTHYDROSURVEY_ID), 
+                                  relationship = "many-to-many", keep = TRUE)|>
+  mutate(SurveyType, case_when(
+    !is.na(POSTHYDROSURVEY_ID) ~ "AD",
+    TRUE ~ SurveyType))
+
+```
+
+
+
 
 ```{r, message=FALSE}
 ### Shoaling Rates
@@ -69,6 +90,9 @@ combined_data <- map_dfr(files, read_and_label2)
 # Check it out
 glimpse(combined_data)
 
+bad_data <- combined_data|>
+  filter(abs(AnnualShoalingRate_ftperyr) >= 30)
+
 combined_data_clean<-combined_data|>
   mutate(Before_date = ymd(SurveyDateBefore),
          After_date = ymd(SurveyDateAfter))|>
@@ -76,7 +100,6 @@ combined_data_clean<-combined_data|>
   mutate(DailyShoalingRate_ftperday = AnnualShoalingRate_ftperyr/DateDiff,
          DailyShoalingVolume_Cyperday = AnnualShoalingVolume_CYperyr/DateDiff,
          VolChange_Cyperday = NetVolumeChange_CY/DateDiff)
-#  filter(DailyShoalingVolume_Cyperday < 12500000 & DailyShoalingRate_ftperday < 900)
 ```
 
 ###Plot Rates by day
@@ -112,6 +135,7 @@ ggplot(combined_data_clean, aes(x = Before_date, y = NetVolumeChange_CY)) +
 
 
 ```
+
 Let's only look at rate differences calculated within a year 
 ```{r}
 combined_data_year <- combined_data_clean|>
@@ -122,25 +146,43 @@ combined_data_year <- combined_data_clean|>
 ```
 
 ```{r}
-ggplot(combined_data_year, aes(x = After_date, y = AnnualShoalingVolume_CYperyr, colour = river)) +
+outliers_zscore <- combined_data_clean |>
+  group_by(pool) |>
+  mutate(score = as.numeric(scale(AnnualShoalingRate_ftperyr))) |>
+  filter(abs(score) > 3) |>  # Points more than 3 standard deviations from mean
+  arrange(pool, desc(abs(score)))|>
+  filter(abs(AnnualShoalingRate_ftperyr) >= 30)
+
+write_csv(outliers_zscore,"Outliers_shoalingRateOmitted.csv")
+```
+
+
+```{r}
+
+
+ggplot(combined_data_clean, aes(x = After_date, y = AnnualShoalingVolume_CYperyr, colour = river)) +
   geom_point() + 
   geom_line()+
 #  ylim(NA,2000000)+
   facet_wrap(~ river)
 
-ggplot(combined_data_year, aes(x = After_date, y = AnnualShoalingRate_ftperyr, colour = river)) +
+ggplot(combined_data_clean, aes(x = After_date, y = AnnualShoalingRate_ftperyr, colour = river)) +
+  geom_point() + 
+  geom_line()+
+   labs(title = "Annual Shoaling Rate (ft/yr) By Pool",
+       x = "Survey Date",
+       y = "Annual Shoaling Rate (ft/yr)",
+       color = "River") +
+ # ylim(-30, 30)+
+  facet_wrap(~ pool)
+
+ggplot(combined_data_clean, aes(x = After_date, y = NetVolumeChange_CY, colour = river)) +
   geom_point() + 
   geom_line()+
 #  ylim(NA, 275)+
   facet_wrap(~ river)
 
-ggplot(combined_data_year, aes(x = After_date, y = NetVolumeChange_CY, colour = river)) +
-  geom_point() + 
-  geom_line()+
-#  ylim(NA, 275)+
-  facet_wrap(~ river)
-
-ggplot(combined_data_year, aes(x = Before_date, y = NetVolumeChange_CY, color = river)) +
+ggplot(combined_data_clean, aes(x = Before_date, y = NetVolumeChange_CY, color = river)) +
   geom_point() +
   theme(legend.position = "bottom")+
   geom_line(alpha = 0.5) +

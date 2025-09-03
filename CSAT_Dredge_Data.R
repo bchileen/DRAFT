@@ -106,4 +106,11 @@ write_csv(CSAT_dredge_data, "C:/workspace/DRAFT/CSAT_Data/Dredged_Date_Vol.csv")
 ggplot(CSAT_dredge_data, aes(x = SurveyDate, y = VolumeChange, colour = River)) +
   geom_point(size = 2)  # Scatter plot
 
+Miss<-dredge_data |>
+  filter(RIVER == "Mississippi_River")
+
+IL<-dredge_data |>
+  filter(RIVER == "Illinois_Waterway")
+  mean(IL$VOLUMEDREDGED)
+  mean(Miss$VOLUMEDREDGED)
 
