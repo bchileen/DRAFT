@@ -17,7 +17,7 @@ library(zoo)
 
 ```{r}
 # Set folder path
-folder_path <- "C:/workspace/CSAT/CSAT_distribution/output/CEMVR/19990101_to_20241231_Aug"
+folder_path <- "C:/workspace/CSAT/CSAT_distribution/output/CEMVR/19990101_to_20241231"
 
 reach_data<-read_csv("C:/workspace/DRAFT/ReachData.csv")
 
