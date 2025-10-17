@@ -55,10 +55,10 @@ date_to_season <- function(date) {
 
 ### Read in the data
 ```{r}
-CSAT_dredge = read_csv("C:/workspace/DRAFT/CSAT_Data/Dredged_Date_Vol.csv",show_col_types = FALSE)
 dredge_data<-read_csv("DredgeData.csv", show_col_types = FALSE)
 survey_data<-read_csv("SurveyData.csv", show_col_types = FALSE)
 gage_data<-read_csv("UMR_IWW_1999_2024.csv", show_col_types = FALSE)
+
 ```
 
 ### Clean the gage data 
@@ -72,7 +72,21 @@ gage_data<- gage_data |>
    summarize(across(everything(),~first(na.omit(.)), .names = "{.col}"))|>
   mutate(DATE_START= as_date(dmy(Date)))|>
     arrange(DATE_START)|>
+  filter(DATE_START >= as.Date("1999-04-01") &
+         DATE_START <= as.Date("2024-12-31")) |>
   select(-Date)
+
+summary(gage_data)
+glimpse(gage_data)
+na_counts <- colSums(is.na(gage_data))
+
+names<-names(gage_data)
+# Create a data frame for the table
+na_table <- data.frame(
+  Gage_Name = names,
+  NA_Count = na_counts
+)|>
+  filter(NA_Count >=1)
 
 ### Some of the gage data has observation gaps where the sensors may not have been
 ### working, lets interpolate gage values where there's data before and after a gap
@@ -82,11 +96,21 @@ gage_data<-gage_data|>
                 ~ ifelse(is.na(.),
                          coalesce((lag(.) + lead(.)) / 2, lag(.), lead(.)),
                          .)))
+
+na_counts_post <- colSums(is.na(gage_data))
+
+names<-names(gage_data)
+# Create a data frame for the table
+na_table <- data.frame(
+  Gage_Name = names,
+  NA_Count = na_counts_post
+)|>
+  filter(NA_Count >=1)
 ```
 
 ### Cleaning the data
 Now lets clean the survey data. I only want conditional survey records between
-1999 to 2022, these are going to act as my background data. I want to combine
+1999 to 2024, these are going to act as my background data. I want to combine
 these records with my dredge data. I'm also going to filter by river, remove
 pools that are not of interest, and create some 
 columns to support my join. Dates are also formatted as date objects and some
@@ -108,19 +132,7 @@ survey_data<- survey_data |>
          UP_RIV_MIL,DN_RIV_MIL)
 ```
 
-```{r}
-CSAT_dredge_clean <- CSAT_dredge |>
-  mutate(VOLUMEDREDGED = VolumeChange,
-         EXECYEAR = year(Date),
-         DATE_START = SurveyDate,
-         RIVER = case_when(River == "UM" ~"Mississippi_River",
-                           River =="IL" ~ "Illinois_Waterway"), 
-         POOL = Pool,
-         UP_RIV_MIL = mileagestart,
-         DN_RIV_MIL = mileageend)|>
-  select(EXECYEAR,DATE_START,VOLUMEDREDGED,RIVER,POOL, 
-         UP_RIV_MIL,DN_RIV_MIL)
-```
+
 
 Lets clean the dredge data, we only want records that are channel dredging events
 and since the dredge records only go back to 1999, we just need to filter out data beyond 2022.
@@ -131,20 +143,18 @@ dredge_data <- dredge_data |>
            EXECYEAR <= 2024)|>
   mutate(
      DATE_START = as_date(mdy_hm(DATE_START)))|>
-  select(EXECYEAR,DREDGINGPURPOSE, VOLUMEDREDGED, RIVER,POOL, DREDGE_TYPE,
+  select(EXECYEAR, VOLUMEDREDGED, RIVER,POOL,
          DATE_START, UP_RIV_MIL,DN_RIV_MIL)
 ```
 
 Combine the dredge data and survey data into 1 table. The survey data will act as background/non-dredge data.
 ```{r}
-combined_data <- bind_rows(survey_data, CSAT_dredge_clean)
+combined_data <- bind_rows(survey_data, dredge_data)
 
 combined_data <-combined_data |>
      filter(DATE_START >= as.Date("1999-04-01") &
          DATE_START <= as.Date("2024-12-31")) |>
            mutate( 
-          #DREDGINGPURPOSE = case_when(DREDGINGPURPOSE == "None" ~ "No Dredging",
-          #                             DREDGINGPURPOSE == "channel" ~ "Dredged"),
                   week_of_year = week(DATE_START))
 
 
@@ -203,6 +213,14 @@ Check again for NAs, remove any remaining NA rows.
 Nas<- gage_survey_full|>
   select(-lead_7,-lead_14)|>
   filter(if_any(everything(),is.na))
+
+
+CSAT_Data<-combined_data_full_clean |>
+  mutate(DATE_START = as.character(SurveyDateAfter),
+         DATE_START = as_date(DATE_START))
+  
+gage_survey_CSAT <- gage_survey_full|>
+  left_join(CSAT_Data, by = c("DATE_START","POOL" = "pool"))
 
 gage_survey_cleaned <- gage_survey_full |>
   filter(complete.cases(gage_survey_full))

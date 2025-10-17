@@ -17,7 +17,7 @@ library(zoo)
 
 ```{r}
 # Set folder path
-folder_path <- "C:/workspace/CSAT/CSAT_distribution/output/CEMVR/19990101_to_20241231"
+folder_path <- "C:/workspace/CSAT/CSAT_distribution/output/CEMVR/19990101__to__20241231"
 
 reach_data<-read_csv("C:/workspace/DRAFT/ReachData.csv")
 
@@ -100,6 +100,8 @@ combined_data_clean<-combined_data|>
   mutate(DailyShoalingRate_ftperday = AnnualShoalingRate_ftperyr/DateDiff,
          DailyShoalingVolume_Cyperday = AnnualShoalingVolume_CYperyr/DateDiff,
          VolChange_Cyperday = NetVolumeChange_CY/DateDiff)
+
+
 ```
 
 ###Plot Rates by day
@@ -112,9 +114,16 @@ ggplot(combined_data_clean, aes(x = After_date, y = AnnualShoalingVolume_CYperyr
 
 ggplot(combined_data_clean, aes(x = After_date, y = AnnualShoalingRate_ftperyr, colour = river)) +
   geom_point() + 
-  geom_line()+
-#  ylim(NA, 275)+
-  facet_wrap(~ river)
+  geom_line() +
+  geom_hline(yintercept = 30, color = "goldenrod", linetype = "dashed", linewidth = 1) +
+  labs(title = "Annual Shoaling Rate (ft/year)",
+       x = "Date of Post Survey",
+       y = "Annual Shoaling Rate",
+       color = "River") +
+  facet_wrap(~ river, labeller = labeller(river = c("IL" = "Illinois Waterway", 
+                                                      "UM" = "Mississippi River"))) +
+  scale_colour_discrete(labels = c("IL" = "Illinois Waterway", 
+                                    "UM" = "Mississippi River"))
 
 ggplot(combined_data_clean, aes(x = After_date, y = NetVolumeChange_CY, colour = river)) +
   geom_point() + 
@@ -143,6 +152,9 @@ combined_data_year <- combined_data_clean|>
   filter(yr_diff <1)|>
   filter(pool != "AL")|>
   filter(pool != "CS")
+
+combined_data_full_clean <- combined_data_year |>
+  filter(complete.cases(combined_data_year))
 ```
 
 ```{r}
